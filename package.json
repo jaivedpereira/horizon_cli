@@ -1,0 +1,23 @@
+{
+  "name": "horizon-cli",
+  "version": "1.1.0",
+  "description": "Seu ecossistema musical direto do terminal. Busca, baixa e organiza músicas no Android e iOS.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "horizon": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "setup": "chmod +x index.js && npm link"
+  },
+  "author": "Horizon User",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "figlet": "^1.7.0",
+    "inquirer": "^9.2.12",
+    "nanospinner": "^1.1.0"
+  }
+}
