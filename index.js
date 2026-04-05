@@ -9,11 +9,15 @@
 import figlet from 'figlet';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { execSync } from 'child_process';
+import { execSync, exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import util from 'util';
 import { createSpinner } from 'nanospinner';
+
+const execPromise = util.promisify(exec);
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURAÇÕES DE CAMINHO ---
 
@@ -39,24 +43,94 @@ function showSplash() {
     console.log(chalk.blueBright('==================================================\n'));
 }
 
-// --- LÓGICA DE BUSCA E DOWNLOAD ---
+// --- LÓGICA DE FILA (MODO LOTE) ---
+
+async function baixarFila(musicas, playlistName) {
+    const baseDir = getMusicPath();
+    const playlistDir = path.join(baseDir, playlistName);
+
+    if (!fs.existsSync(playlistDir)) {
+        fs.mkdirSync(playlistDir, { recursive: true });
+    }
+
+    console.log(chalk.yellow(`\n🚀 Iniciando o Modo Lote com ${musicas.length} músicas...\n`));
+
+    for (let i = 0; i < musicas.length; i++) {
+        const musica = musicas[i];
+        console.log(chalk.cyanBright(`⏳ [${i + 1}/${musicas.length}] Baixando: ${musica}`));
+
+        // 🔔 Notificação de início
+        if (process.env.TERMUX_VERSION) {
+            try { execSync(`termux-notification -t "Horizon CLI" -c "Baixando: ${musica} (${i + 1}/${musicas.length})"`); } catch(e) {}
+        }
+
+        try {
+            const downloadCmd = `yt-dlp "ytsearch1:${musica}" -x --audio-format mp3 --no-warnings --embed-thumbnail --add-metadata -o "${playlistDir}/%(title)s.%(ext)s"`;
+            await execPromise(downloadCmd);
+            
+            console.log(chalk.green(`✅ SUCESSO: ${musica}\n`));
+
+            // ⏱️ Pausa anti-bloqueio se não for a última música
+            if (i < musicas.length - 1) {
+                const delayMs = Math.floor(Math.random() * (8000 - 4000 + 1) + 4000); // Entre 4 e 8 segundos
+                console.log(chalk.gray(`⏱️ Proteção ativada: Pausando por ${delayMs / 1000}s...\n`));
+                await sleep(delayMs);
+            }
+        } catch (error) {
+            console.error(chalk.red(`❌ Erro ao baixar: ${musica}\n`));
+            if (process.env.TERMUX_VERSION) {
+                try { execSync(`termux-notification -t "Horizon CLI" -c "Erro na música: ${musica}"`); } catch(e) {}
+            }
+        }
+    }
+
+    // 🔄 Notifica o Android e finaliza
+    if (process.env.TERMUX_VERSION) {
+        try {
+            execSync(`termux-media-scan -r "${playlistDir}"`);
+            execSync(`termux-notification -t "Horizon CLI" -c "🎉 Fila concluída! Salvo em ${playlistName}"`);
+        } catch (e) {}
+    }
+    
+    console.log(chalk.green.bold(`🎉 Todas as músicas processadas! Salvo em: Horizon/${playlistName}`));
+    setTimeout(mainMenu, 3000);
+}
+
+// --- LÓGICA DE BUSCA E DOWNLOAD (ÚNICA) ---
 
 async function handleSearch() {
     const { query } = await inquirer.prompt([
         {
             type: 'input',
             name: 'query',
-            message: 'Qual música ou artista você quer buscar?'
+            message: 'Qual música ou artista? (Para Modo Lote, separe por vírgula)'
         }
     ]);
 
     if (!query) return mainMenu();
 
-    const spinner = createSpinner(`Buscando no YouTube por "${query}"...`).start();
+    // Divide a string por vírgulas, remove espaços e descarta vazios
+    const musicas = query.split(',').map(m => m.trim()).filter(m => m !== "");
+
+    // ➡️ SE TIVER VÍRGULA, VAI PRO MODO LOTE
+    if (musicas.length > 1) {
+        const { playlist } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'playlist',
+                message: 'Em qual playlist salvar o lote? (Enter para "Geral")',
+                default: 'Geral'
+            }
+        ]);
+        return baixarFila(musicas, playlist);
+    }
+
+    // ➡️ SE FOR SÓ UMA MÚSICA, CONTINUA O FLUXO NORMAL (COM SPINNER)
+    const singleQuery = musicas[0];
+    const spinner = createSpinner(`Buscando no YouTube por "${singleQuery}"...`).start();
     
     try {
-        // Busca 5 resultados usando yt-dlp
-        const searchCmd = `yt-dlp "ytsearch5:${query}" --get-title --get-id --no-warnings`;
+        const searchCmd = `yt-dlp "ytsearch5:${singleQuery}" --get-title --get-id --no-warnings`;
         const outputRaw = execSync(searchCmd).toString().trim();
         
         spinner.success({ text: 'Busca concluída!' });
@@ -108,32 +182,37 @@ function baixarMusica(id, playlistName) {
     const baseDir = getMusicPath();
     const playlistDir = path.join(baseDir, playlistName);
 
-    // Cria as pastas se não existirem
     if (!fs.existsSync(playlistDir)) {
         fs.mkdirSync(playlistDir, { recursive: true });
     }
 
-    const url = `https://www.youtube.com/watch?v=${id}`;
+    // Corrigido o formato da URL para evitar erros de ID
+    const url = `https://youtu.be/${id}`;
     console.log(chalk.cyanBright(`\n⏳ Baixando e processando áudio...`));
 
-    // Comando yt-dlp otimizado para MP3 com metadados e sem ID no nome
+    // 🔔 Notificação de download único
+    if (process.env.TERMUX_VERSION) {
+        try { execSync(`termux-notification -t "Horizon CLI" -c "Baixando áudio..."`); } catch(e) {}
+    }
+
     const downloadCmd = `yt-dlp -x --audio-format mp3 --no-warnings --embed-thumbnail --add-metadata -o "${playlistDir}/%(title)s.%(ext)s" "${url}"`;
 
     try {
         execSync(downloadCmd, { stdio: 'inherit' });
         console.log(chalk.green(`\n✅ SUCESSO! Música salva em: Horizon/${playlistName}`));
 
-        // Força o Android a atualizar a galeria de música imediatamente
         if (process.env.TERMUX_VERSION) {
             try {
                 execSync(`termux-media-scan -r "${playlistDir}"`);
+                execSync(`termux-notification -t "Horizon CLI" -c "✅ Música baixada com sucesso!"`);
                 console.log(chalk.gray(`🔄 Sistema Android notificado sobre a nova música.`));
-            } catch (e) {
-                // Falha silenciosa caso o termux-api não esteja instalado
-            }
+            } catch (e) {}
         }
     } catch (error) {
         console.error(chalk.red("\n❌ Erro durante o download. Verifique o yt-dlp."));
+        if (process.env.TERMUX_VERSION) {
+            try { execSync(`termux-notification -t "Horizon CLI" -c "❌ Erro no download."`); } catch(e) {}
+        }
     }
     
     setTimeout(mainMenu, 3000);
@@ -216,3 +295,4 @@ async function mainMenu() {
 
 // Inicialização
 mainMenu();
+
