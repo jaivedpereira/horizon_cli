@@ -3,7 +3,7 @@
 /**
  * HORIZON CLI
  * Seu ecossistema musical direto do terminal.
- * Desenvolvido para Termux (Android) e a-Shell (iOS).
+ * Versão Clean (Sem Cookies) + Notificações Inteligentes (Anti-Spam).
  */
 
 import figlet from 'figlet';
@@ -20,18 +20,14 @@ const execPromise = util.promisify(exec);
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- CONFIGURAÇÕES DE CAMINHO ---
-
 function getMusicPath() {
-    // Detecta se está no Termux
     if (process.env.TERMUX_VERSION) {
         return "/sdcard/Music/Horizon";
     }
-    // Padrão para iOS (a-Shell) ou Computador
     return path.join(os.homedir(), 'Music/Horizon');
 }
 
 // --- INTERFACE VISUAL ---
-
 function showSplash() {
     console.clear();
     console.log(
@@ -43,256 +39,219 @@ function showSplash() {
     console.log(chalk.blueBright('==================================================\n'));
 }
 
-// --- LÓGICA DE FILA (MODO LOTE) ---
+// --- SISTEMA DE NOTIFICAÇÕES INTELIGENTES ---
+function notificar(titulo, mensagem, tipo = 'normal') {
+    if (process.env.TERMUX_VERSION) {
+        try {
+            // O uso do "-i 1000" faz a notificação atualizar em vez de criar uma nova (Anti-Spam)
+            let cmd = `termux-notification -i 1000 -t "${titulo}" -c "${mensagem}"`;
+            
+            // Se for do tipo 'progresso', a notificação fica fixada e não dá pra arrastar pro lado
+            if (tipo === 'progresso') {
+                cmd += " --ongoing";
+            }
+            execSync(cmd);
+        } catch(e) {}
+    }
+}
 
+function atualizarGaleria(caminhoPasta) {
+    if (process.env.TERMUX_VERSION) {
+        try { execSync(`termux-media-scan -r "${caminhoPasta}"`); } catch(e) {}
+    }
+}
+
+// --- LÓGICA DE FILA (MODO LOTE) ---
 async function baixarFila(musicas, playlistName) {
     const baseDir = getMusicPath();
     const playlistDir = path.join(baseDir, playlistName);
 
-    if (!fs.existsSync(playlistDir)) {
-        fs.mkdirSync(playlistDir, { recursive: true });
-    }
+    if (!fs.existsSync(playlistDir)) fs.mkdirSync(playlistDir, { recursive: true });
 
     console.log(chalk.yellow(`\n🚀 Iniciando o Modo Lote com ${musicas.length} músicas...\n`));
 
     for (let i = 0; i < musicas.length; i++) {
         const musica = musicas[i];
         console.log(chalk.cyanBright(`⏳ [${i + 1}/${musicas.length}] Baixando: ${musica}`));
-
-        // 🔔 Notificação de início
-        if (process.env.TERMUX_VERSION) {
-            try { execSync(`termux-notification -t "Horizon CLI" -c "Baixando: ${musica} (${i + 1}/${musicas.length})"`); } catch(e) {}
-        }
+        
+        // Notificação inteligente em tempo real
+        notificar("Horizon CLI (Baixando Lote)", `[${i + 1}/${musicas.length}]: ${musica}`, 'progresso');
 
         try {
             const downloadCmd = `yt-dlp "ytsearch1:${musica}" -x --audio-format mp3 --no-warnings --embed-thumbnail --add-metadata -o "${playlistDir}/%(title)s.%(ext)s"`;
             await execPromise(downloadCmd);
-            
             console.log(chalk.green(`✅ SUCESSO: ${musica}\n`));
 
-            // ⏱️ Pausa anti-bloqueio se não for a última música
             if (i < musicas.length - 1) {
-                const delayMs = Math.floor(Math.random() * (8000 - 4000 + 1) + 4000); // Entre 4 e 8 segundos
-                console.log(chalk.gray(`⏱️ Proteção ativada: Pausando por ${delayMs / 1000}s...\n`));
+                const delayMs = Math.floor(Math.random() * (6000 - 3000 + 1) + 3000); 
                 await sleep(delayMs);
             }
         } catch (error) {
             console.error(chalk.red(`❌ Erro ao baixar: ${musica}\n`));
-            if (process.env.TERMUX_VERSION) {
-                try { execSync(`termux-notification -t "Horizon CLI" -c "Erro na música: ${musica}"`); } catch(e) {}
-            }
         }
     }
 
-    // 🔄 Notifica o Android e finaliza
-    if (process.env.TERMUX_VERSION) {
-        try {
-            execSync(`termux-media-scan -r "${playlistDir}"`);
-            execSync(`termux-notification -t "Horizon CLI" -c "🎉 Fila concluída! Salvo em ${playlistName}"`);
-        } catch (e) {}
-    }
-    
+    atualizarGaleria(playlistDir);
+    notificar("Horizon CLI", `🎉 Fila concluída! ${musicas.length} músicas salvas em "${playlistName}".`, 'sucesso');
     console.log(chalk.green.bold(`🎉 Todas as músicas processadas! Salvo em: Horizon/${playlistName}`));
     setTimeout(mainMenu, 3000);
 }
 
-// --- LÓGICA DE BUSCA E DOWNLOAD (ÚNICA) ---
-
+// --- LÓGICA DE BUSCA ---
 async function handleSearch() {
     const { query } = await inquirer.prompt([
         {
             type: 'input',
             name: 'query',
-            message: 'Qual música ou artista? (Para Modo Lote, separe por vírgula)'
+            message: 'Busca (nome, link do YT ou lote por vírgula):'
         }
     ]);
 
     if (!query) return mainMenu();
 
-    // Divide a string por vírgulas, remove espaços e descarta vazios
     const musicas = query.split(',').map(m => m.trim()).filter(m => m !== "");
 
-    // ➡️ SE TIVER VÍRGULA, VAI PRO MODO LOTE
     if (musicas.length > 1) {
-        const { playlist } = await inquirer.prompt([
-            {
-                type: 'input',
-                name: 'playlist',
-                message: 'Em qual playlist salvar o lote? (Enter para "Geral")',
-                default: 'Geral'
-            }
-        ]);
+        const { playlist } = await inquirer.prompt([{ type: 'input', name: 'playlist', message: 'Pasta:', default: 'Geral' }]);
         return baixarFila(musicas, playlist);
     }
 
-    // ➡️ SE FOR SÓ UMA MÚSICA, CONTINUA O FLUXO NORMAL (COM SPINNER)
     const singleQuery = musicas[0];
-    const spinner = createSpinner(`Buscando no YouTube por "${singleQuery}"...`).start();
-    
+    const isUrl = singleQuery.startsWith('http') || singleQuery.includes('youtu');
+
+    if (isUrl) {
+        const { playlist } = await inquirer.prompt([{ type: 'input', name: 'playlist', message: 'Pasta:', default: 'Geral' }]);
+        return baixarMusicaUnica(singleQuery, playlist);
+    }
+
+    const spinner = createSpinner(`Buscando...`).start();
     try {
-        const searchCmd = `yt-dlp "ytsearch5:${singleQuery}" --get-title --get-id --no-warnings`;
+        const searchCmd = `yt-dlp "ytsearch5:${singleQuery}" --get-title --get-id --no-warnings --flat-playlist`;
         const outputRaw = execSync(searchCmd).toString().trim();
-        
-        spinner.success({ text: 'Busca concluída!' });
+        spinner.success();
 
         const lines = outputRaw.split('\n').filter(line => line.trim() !== "");
         const choices = [];
-        
         for (let i = 0; i < lines.length; i += 2) {
-            if (lines[i] && lines[i+1]) {
-                choices.push({
-                    name: lines[i], 
-                    value: lines[i+1] 
-                });
-            }
+            if (lines[i] && lines[i+1]) choices.push({ name: lines[i], value: lines[i+1] });
         }
 
         if (choices.length === 0) {
             console.log(chalk.yellow('⚠️ Nenhuma música encontrada.'));
-            return setTimeout(mainMenu, 1500);
+            return setTimeout(mainMenu, 2500);
         }
 
-        const { selectedId } = await inquirer.prompt([
-            {
-                type: 'rawlist',
-                name: 'selectedId',
-                message: 'Selecione a versão para baixar:',
-                choices: choices
-            }
-        ]);
+        const { selectedId } = await inquirer.prompt([{ type: 'rawlist', name: 'selectedId', message: 'Escolha a versão:', choices: choices }]);
+        const { playlist } = await inquirer.prompt([{ type: 'input', name: 'playlist', message: 'Pasta:', default: 'Geral' }]);
 
-        const { playlist } = await inquirer.prompt([
-            {
-                type: 'input',
-                name: 'playlist',
-                message: 'Em qual playlist salvar? (Enter para "Geral")',
-                default: 'Geral'
-            }
-        ]);
-
-        baixarMusica(selectedId, playlist);
-
+        baixarMusicaUnica(selectedId, playlist);
     } catch (err) {
-        spinner.error({ text: 'Erro na busca. Verifique sua conexão ou o yt-dlp.' });
+        spinner.error({ text: 'Erro na busca. Verifique a internet.' });
         setTimeout(mainMenu, 2000);
     }
 }
 
-function baixarMusica(id, playlistName) {
+function baixarMusicaUnica(inputUrlOrId, playlistName) {
     const baseDir = getMusicPath();
     const playlistDir = path.join(baseDir, playlistName);
+    if (!fs.existsSync(playlistDir)) fs.mkdirSync(playlistDir, { recursive: true });
 
-    if (!fs.existsSync(playlistDir)) {
-        fs.mkdirSync(playlistDir, { recursive: true });
-    }
-
-    // Corrigido o formato da URL para evitar erros de ID
-    const url = `https://youtu.be/${id}`;
-    console.log(chalk.cyanBright(`\n⏳ Baixando e processando áudio...`));
-
-    // 🔔 Notificação de download único
-    if (process.env.TERMUX_VERSION) {
-        try { execSync(`termux-notification -t "Horizon CLI" -c "Baixando áudio..."`); } catch(e) {}
-    }
+    const url = inputUrlOrId.startsWith('http') ? inputUrlOrId : `https://www.youtube.com/watch?v=${inputUrlOrId}`;
+    
+    console.log(chalk.cyanBright(`\n⏳ Baixando áudio...`));
+    notificar("Horizon CLI", "Baixando música...", "progresso");
 
     const downloadCmd = `yt-dlp -x --audio-format mp3 --no-warnings --embed-thumbnail --add-metadata -o "${playlistDir}/%(title)s.%(ext)s" "${url}"`;
 
     try {
         execSync(downloadCmd, { stdio: 'inherit' });
-        console.log(chalk.green(`\n✅ SUCESSO! Música salva em: Horizon/${playlistName}`));
-
-        if (process.env.TERMUX_VERSION) {
-            try {
-                execSync(`termux-media-scan -r "${playlistDir}"`);
-                execSync(`termux-notification -t "Horizon CLI" -c "✅ Música baixada com sucesso!"`);
-                console.log(chalk.gray(`🔄 Sistema Android notificado sobre a nova música.`));
-            } catch (e) {}
-        }
+        console.log(chalk.green(`\n✅ Concluído!`));
+        atualizarGaleria(playlistDir);
+        notificar("Horizon CLI", "✅ Música baixada com sucesso!", "sucesso");
     } catch (error) {
-        console.error(chalk.red("\n❌ Erro durante o download. Verifique o yt-dlp."));
-        if (process.env.TERMUX_VERSION) {
-            try { execSync(`termux-notification -t "Horizon CLI" -c "❌ Erro no download."`); } catch(e) {}
-        }
+        console.error(chalk.red("\n❌ Erro no download. O YouTube pode estar bloqueando temporariamente."));
+        notificar("Horizon CLI", "❌ Erro no download.", "sucesso"); // Tira o ongoing pra pessoa fechar
     }
-    
     setTimeout(mainMenu, 3000);
 }
 
-// --- GERENCIAMENTO DE PLAYLISTS ---
+// --- LÓGICA DE BAIXAR PLAYLISTS ---
+async function handlePlaylistDownload() {
+    console.clear();
+    console.log(chalk.blueBright('=================================================='));
+    console.log(chalk.yellowBright.bold(`💡 AVISO: MÚSICAS DE OUTRAS PLATAFORMAS 💡`));
+    console.log(chalk.white(`O Horizon baixa playlists do YouTube nativamente.`));
+    console.log(chalk.white(`Para baixar do `) + chalk.green(`Spotify`) + chalk.white(`, `) + chalk.magenta(`Deezer`) + chalk.white(` ou `) + chalk.red(`Apple Music`) + chalk.white(`:`));
+    console.log(chalk.gray(`  1. Acesse o site gratuito `) + chalk.cyan.underline(`TuneMyMusic.com`));
+    console.log(chalk.gray(`  2. Converta sua playlist de lá para o YouTube.`));
+    console.log(chalk.gray(`  3. Cole o link da nova playlist do YouTube aqui.`));
+    console.log(chalk.blueBright('==================================================\n'));
+    
+    const { url } = await inquirer.prompt([{ type: 'input', name: 'url', message: 'Cole o LINK da Playlist do YouTube:' }]);
+    if (!url) return mainMenu();
+
+    const { playlistName } = await inquirer.prompt([{ type: 'input', name: 'playlistName', message: 'Nome da pasta:', default: 'MinhaPlaylist' }]);
+    const baseDir = getMusicPath();
+    const playlistDir = path.join(baseDir, playlistName);
+
+    if (!fs.existsSync(playlistDir)) fs.mkdirSync(playlistDir, { recursive: true });
+
+    console.log(chalk.cyanBright(`\n⏳ Iniciando download em massa...`));
+    notificar("Horizon CLI", `Lendo Playlist: ${playlistName}...`, "progresso");
+
+    try {
+        const ytdlCmd = `yt-dlp -x --audio-format mp3 --yes-playlist --no-warnings --embed-thumbnail --add-metadata -o "${playlistDir}/%(title)s.%(ext)s" "${url}"`;
+        execSync(ytdlCmd, { stdio: 'inherit' });
+        atualizarGaleria(playlistDir);
+        notificar("Horizon CLI", `✅ Playlist [${playlistName}] baixada 100%!`, "sucesso");
+    } catch (error) {
+        console.error(chalk.red("\n❌ Erro na playlist."));
+        notificar("Horizon CLI", `❌ Erro no download da Playlist.`, "sucesso");
+    }
+    setTimeout(mainMenu, 5000);
+}
 
 async function handlePlaylists() {
     const baseDir = getMusicPath();
-    
-    if (!fs.existsSync(baseDir)) {
-        console.log(chalk.yellow('\nVocê ainda não baixou nenhuma música.'));
-        return setTimeout(mainMenu, 2000);
-    }
+    if (!fs.existsSync(baseDir)) return mainMenu();
+    const folders = fs.readdirSync(baseDir).filter(f => fs.statSync(path.join(baseDir, f)).isDirectory());
+    if (folders.length === 0) return mainMenu();
 
-    const folders = fs.readdirSync(baseDir).filter(f => {
-        return fs.statSync(path.join(baseDir, f)).isDirectory();
-    });
-
-    if (folders.length === 0) {
-        console.log(chalk.yellow('\nNenhuma playlist encontrada.'));
-        return setTimeout(mainMenu, 2000);
-    }
-
-    const { selectedFolder } = await inquirer.prompt([
-        {
-            type: 'rawlist',
-            name: 'selectedFolder',
-            message: 'Suas Playlists:',
-            choices: [...folders, '⬅️ Voltar']
-        }
-    ]);
-
+    const { selectedFolder } = await inquirer.prompt([{ type: 'rawlist', name: 'selectedFolder', message: 'Playlists:', choices: [...folders, '⬅️ Voltar'] }]);
     if (selectedFolder === '⬅️ Voltar') return mainMenu();
 
     const files = fs.readdirSync(path.join(baseDir, selectedFolder)).filter(f => f.endsWith('.mp3'));
-    
-    console.log(chalk.magenta(`\n🎵 Músicas em [${selectedFolder}]:`));
-    if (files.length === 0) {
-        console.log(chalk.gray('  (Esta playlist está vazia)'));
-    } else {
-        files.forEach(file => console.log(chalk.white(`  - ${file}`)));
-    }
-
-    await inquirer.prompt([{ type: 'input', name: 'back', message: '\nPressione Enter para voltar...' }]);
+    files.forEach(file => console.log(chalk.white(`  - ${file}`)));
+    await inquirer.prompt([{ type: 'input', name: 'back', message: '\nEnter para voltar...' }]);
     handlePlaylists();
 }
 
-// --- MENU PRINCIPAL ---
-
 async function mainMenu() {
     showSplash();
-
     const { action } = await inquirer.prompt([
         {
             type: 'rawlist',
             name: 'action',
-            message: 'O que deseja fazer?',
+            message: 'Menu Principal:',
             choices: [
-                { name: '🔍 Buscar e Baixar Música', value: 'search' },
-                { name: '📁 Ver minhas Playlists', value: 'playlists' },
+                { name: '🔍 Buscar (Nome / Link / Lote)', value: 'search' },
+                { name: '📥 Baixar Playlist Completa', value: 'playlist_link' },
+                { name: '📁 Ver Arquivos Baixados', value: 'playlists' },
                 { name: '❌ Sair do Horizon', value: 'exit' }
             ]
         }
     ]);
 
     switch (action) {
-        case 'search':
-            handleSearch();
-            break;
-        case 'playlists':
-            handlePlaylists();
-            break;
-        case 'exit':
+        case 'search': handleSearch(); break;
+        case 'playlist_link': handlePlaylistDownload(); break;
+        case 'playlists': handlePlaylists(); break;
+        case 'exit': 
             console.log(chalk.green('\nDesligando o Horizon. Até a próxima!\n'));
-            process.exit(0);
+            process.exit(0); 
             break;
     }
 }
 
-// Inicialização
 mainMenu();
 
