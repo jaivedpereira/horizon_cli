@@ -834,7 +834,7 @@ const program = new Command();
 program
     .name('horizon')
     .description('Horizon CLI — ecossistema musical no terminal')
-    .version('2.2.0');
+    .version('2.3.0');
 
 program
     .command('search <termo...>')
@@ -1020,6 +1020,54 @@ program
     .description('Restaurar backup (mescla por padrão)')
     .option('--no-merge', 'sobrescreve em vez de mesclar')
     .action((file, opts) => { doRestore(file, { merge: opts.merge !== false }); process.exit(0); });
+
+// Novos v2.3:
+program
+    .command('bot')
+    .description('Iniciar o bot do Telegram (modo servidor)')
+    .action(async () => {
+        // Delega para bot.js sem subprocess: import dinâmico mantém um único processo.
+        await import('./bot.js');
+    });
+
+program
+    .command('schedule')
+    .description('Rodar sync das inscrições periodicamente (foreground)')
+    .option('-i, --interval <h>', 'intervalo em horas (padrão 6)', (v) => parseFloat(v))
+    .option('--no-immediate', 'não roda no start, espera o primeiro intervalo')
+    .action(async (opts) => {
+        requireDependencies();
+        const { runScheduler } = await import('./src/scheduler.js');
+        await runScheduler({
+            intervalHours: opts.interval || 6,
+            runOnStart: opts.immediate !== false,
+        });
+        process.exit(0);
+    });
+
+program
+    .command('cleanup')
+    .description('Limpar caches efêmeros do bot (~/.horizon/bot-cache)')
+    .action(() => {
+        const cacheDir = path.join(getMusicBaseDir(), '..', '.horizon', 'bot-cache');
+        // Caminho seguro:
+        const dir = path.join(process.env.HOME || '~', '.horizon', 'bot-cache');
+        if (!fs.existsSync(dir)) {
+            console.log(chalk.gray('Nada pra limpar.'));
+            process.exit(0);
+        }
+        let removed = 0;
+        for (const sub of fs.readdirSync(dir)) {
+            const full = path.join(dir, sub);
+            if (fs.statSync(full).isDirectory()) {
+                for (const f of fs.readdirSync(full)) {
+                    try { fs.unlinkSync(path.join(full, f)); removed += 1; } catch { /* ignore */ }
+                }
+            }
+        }
+        console.log(chalk.green(`✅ Cache do bot limpo: ${removed} arquivos removidos.`));
+        process.exit(0);
+    });
 
 // Sem argumentos → menu interativo.
 if (process.argv.length <= 2) {

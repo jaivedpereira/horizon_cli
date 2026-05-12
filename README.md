@@ -7,13 +7,14 @@
 
 Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 
-**Versão atual:** `2.2.0` ("Anti-Ban")
+**Versão atual:** `2.3.0` ("Servidor")
 
 ---
 
 ## 📑 Sumário
 
 - [Destaques](#-destaques)
+- [Novidades v2.3](#-novidades-da-v23-servidor)
 - [Novidades v2.2](#-novidades-da-v22-anti-ban)
 - [Instalação](#-instalação)
 - [Sistema anti-bloqueio](#%EF%B8%8F-sistema-anti-bloqueio-do-youtube)
@@ -48,6 +49,19 @@ Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 - 🇧🇷 **Configurações 100% em português**, organizadas por seção
 
 ---
+
+## ✨ Novidades da v2.3 ("Servidor")
+
+- **Bot reescrito como servidor multiusuário** — pensado pra rodar 24/7.
+- **Baixa, envia, e DELETA** — `~/.horizon/bot-cache/<userId>/` é efêmera.
+- **Quota diária** por usuário (`DAILY_QUOTA`) com reset automático.
+- **Concorrência global** (`MAX_CONCURRENT_DOWNLOADS`) para anti-ban.
+- **Lista de admins** (`ADMIN_USER_IDS`) com comandos `/admin_users`,
+  `/admin_block`, `/admin_unblock`, `/admin_broadcast`.
+- **Confirmação de playlists** com botão (limite `PLAYLIST_MAX_TRACKS`).
+- **Auto-update do yt-dlp** na inicialização (`AUTO_UPDATE_YTDLP=1`).
+- **`/me`** — usuário vê seu perfil e quota.
+- **`horizon bot`**, **`horizon schedule`**, **`horizon cleanup`** novos no CLI.
 
 ## ✨ Novidades da v2.2 ("Anti-Ban")
 
@@ -516,6 +530,50 @@ horizon lyrics Favs
 
 ---
 
+## 🤖 Servidor (v2.3)
+
+### `horizon bot`
+**Inicia o bot do Telegram em modo servidor.** Lê o `.env`, registra usuários,
+respeita whitelist/admins/quota e roda até receber SIGINT/SIGTERM. Cada
+download é feito em pasta efêmera por usuário e apagado depois de enviado.
+
+```bash
+horizon bot
+# equivalente a: node bot.js  ou  npm run bot
+```
+
+> Ver seção [Bot do Telegram](#-bot-do-telegram) para detalhes do `.env`.
+
+---
+
+### `horizon schedule`
+**Sync automático em loop.** Roda em primeiro plano, ideal pra colocar em
+`tmux`/`systemd`/`Termux:Boot`. Cada tick faz `horizon sync` e depois
+processa a fila.
+
+| Flag | Descrição |
+|---|---|
+| `-i, --interval <h>` | Intervalo em horas (default 6) |
+| `--no-immediate` | Espera o primeiro intervalo ao invés de rodar agora |
+
+```bash
+horizon schedule              # a cada 6h, começa agora
+horizon schedule -i 12        # a cada 12h
+horizon schedule -i 1 --no-immediate
+```
+
+---
+
+### `horizon cleanup`
+**Limpa o cache efêmero do bot** (`~/.horizon/bot-cache/`). Útil em manutenção
+ou se o bot for desligado de forma forçada e tiver deixado lixo.
+
+```bash
+horizon cleanup
+```
+
+---
+
 ## 🖥️ Auto-complete do shell
 
 ### `horizon completion <shell>`
@@ -578,6 +636,9 @@ horizon completion fish > ~/.config/fish/completions/horizon.fish
 | `horizon export <pasta>` | Gera .m3u + README.md |
 | `horizon lyrics <pasta>` | Baixa .lrc |
 | `horizon completion <shell>` | Script de auto-complete |
+| `horizon bot` | Inicia o bot do Telegram (modo servidor) |
+| `horizon schedule [-i 6]` | Sync automático em loop (foreground) |
+| `horizon cleanup` | Limpa cache efêmero do bot |
 
 ---
 
@@ -651,19 +712,92 @@ após download (via `termux-media-scan`).
 
 ```bash
 cp .env.example .env   # configure BOT_TOKEN
-npm run bot
+horizon bot            # ou: npm run bot
 ```
 
-Comandos do bot: `/start`, `/help`, `/search`, `/stats`, `/cancel`. Envie nome,
-link ou playlist do YouTube e o bot baixa pra você.
+### Modo servidor (multiusuário 24/7)
 
-Variáveis (`.env`):
+A partir da v2.3 o bot foi feito pra rodar em VPS / Termux / PC ligado.
+**Baixa a música, manda pro usuário e apaga** — não acumula nada no servidor.
 
-| Variável            | Descrição                                                            |
-| ------------------- | -------------------------------------------------------------------- |
-| `BOT_TOKEN`         | Token do @BotFather                                                  |
-| `ALLOWED_USER_IDS`  | IDs separados por vírgula (vazio = aberto)                           |
-| `RATE_LIMIT_MS`     | Intervalo mínimo entre mensagens (padrão 1500)                       |
+#### Variáveis (`.env`)
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `BOT_TOKEN` | — | Token do @BotFather (obrigatório) |
+| `ALLOWED_USER_IDS` | (vazio = aberto) | IDs permitidos, vírgula |
+| `ADMIN_USER_IDS` | — | IDs de admins (separado da whitelist) |
+| `DAILY_QUOTA` | `30` | Downloads por dia por usuário (admins ignoram) |
+| `MAX_CONCURRENT_DOWNLOADS` | `2` | Downloads simultâneos no servidor |
+| `PLAYLIST_MAX_TRACKS` | `100` | Máx. de faixas por playlist |
+| `RATE_LIMIT_MS` | `1500` | Intervalo mín. entre mensagens |
+| `AUTO_UPDATE_YTDLP` | `0` | `1` = atualiza yt-dlp ao iniciar (recomendado) |
+
+#### Comandos públicos (qualquer usuário)
+
+- `/start` — boas-vindas
+- `/help` — ajuda detalhada
+- `/search <termo>` — busca com botões
+- `/me` — seu perfil + quota usada hoje
+- `/stats` — estatísticas globais
+- `/cancel` — cancela o passo atual
+
+#### Comandos de admin (apenas IDs em `ADMIN_USER_IDS`)
+
+- `/admin_users` — lista os 20 usuários mais recentes
+- `/admin_block <id>` — bloqueia usuário
+- `/admin_unblock <id>` — libera usuário
+- `/admin_broadcast <msg>` — envia mensagem para TODOS
+
+#### Como rodar 24/7
+
+**Termux (Android):**
+```bash
+# Instale o Termux:Boot da F-Droid pra rodar no boot do celular.
+# Crie ~/.termux/boot/horizon-bot.sh:
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+cd ~/horizon_cli && horizon bot
+```
+
+**VPS Linux (systemd):**
+```ini
+# /etc/systemd/system/horizon-bot.service
+[Unit]
+Description=Horizon Bot
+After=network.target
+
+[Service]
+Type=simple
+User=horizon
+WorkingDirectory=/home/horizon/horizon_cli
+ExecStart=/usr/bin/node bot.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now horizon-bot
+sudo journalctl -u horizon-bot -f   # ver logs
+```
+
+**VPS rapidão (tmux):**
+```bash
+tmux new -s horizon
+horizon bot
+# Ctrl+B, D pra desanexar. Volta com: tmux attach -t horizon
+```
+
+#### Sync automático em segundo plano
+
+Pra atualizar inscrições periodicamente sem rodar o bot:
+
+```bash
+horizon schedule -i 6   # roda sync a cada 6 horas
+```
 
 ---
 
