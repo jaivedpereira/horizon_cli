@@ -1,6 +1,6 @@
 {
   "name": "horizon-cli",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Seu ecossistema musical direto do terminal. Busca, baixa, organiza e envia músicas via CLI ou bot do Telegram. Compatível com Android (Termux), Linux, macOS e Windows.",
   "type": "module",
   "main": "index.js",
@@ -15,12 +15,14 @@
   "scripts": {
     "start": "node index.js",
     "bot": "node bot.js",
+    "schedule": "node index.js schedule",
     "doctor": "node index.js doctor",
     "health": "node index.js health",
     "stats": "node index.js stats",
     "sync": "node index.js sync",
     "antiban": "node index.js antiban status",
     "backup": "node index.js backup",
+    "cleanup": "node index.js cleanup",
     "setup": "chmod +x index.js && npm link"
   },
   "engines": {

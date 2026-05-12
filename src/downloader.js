@@ -51,9 +51,10 @@ function gateOnCircuit() {
     return false;
 }
 
-/** Garante que a pasta da playlist existe e retorna o caminho. */
-export function ensurePlaylistDir(playlistName) {
-    const base = getMusicBaseDir();
+/** Garante que a pasta da playlist existe e retorna o caminho.
+ *  Aceita `baseOverride` para o bot poder usar pasta efêmera. */
+export function ensurePlaylistDir(playlistName, baseOverride) {
+    const base = baseOverride || getMusicBaseDir();
     const dir = path.join(base, sanitizeName(playlistName));
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return dir;
@@ -150,7 +151,7 @@ export async function downloadOne({
         return { ok: false, error: new Error('circuit breaker aberto') };
     }
     const settings = { ...loadSettings(), ...overrides };
-    const dir = ensurePlaylistDir(playlist);
+    const dir = ensurePlaylistDir(playlist, overrides.musicBaseDir);
 
     log.info(`download: start ${target} → ${playlist} (antiban=${settings.antibanMode})`);
 
@@ -208,7 +209,7 @@ export async function downloadPlaylist({
         return { ok: false, error: new Error('circuit breaker aberto') };
     }
     const settings = { ...loadSettings(), ...overrides };
-    const dir = ensurePlaylistDir(playlist);
+    const dir = ensurePlaylistDir(playlist, overrides.musicBaseDir);
     const cmd = buildYtdlpCommand({
         target: url,
         outDir: dir,

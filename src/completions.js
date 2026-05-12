@@ -8,6 +8,7 @@ const COMMANDS = [
     'doctor', 'health', 'stats', 'logs', 'update', 'subs', 'sync',
     'export', 'lyrics', 'queue', 'completion',
     'antiban', 'scan', 'backup', 'restore',
+    'bot', 'schedule', 'cleanup',
 ];
 
 export const BASH = `# Horizon CLI — bash completion
