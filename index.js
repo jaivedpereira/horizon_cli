@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * HORIZON CLI — Entry point (v2.2 "Anti-Ban")
+ * HORIZON CLI — Entry point
  *
  * Modos:
  *   horizon                         # menu interativo
@@ -9,25 +9,18 @@
  *   horizon url <link>              # baixar de URL
  *   horizon batch "a, b, c"         # lote
  *   horizon playlist <url>          # playlist YT inteira
- *   horizon config                  # editar preferências (seções em PT)
- *   horizon history [--clear]
- *   horizon doctor
- *   horizon stats
- *   horizon logs [-n 50] [--path]
+ *   horizon config                  # editar preferências
+ *   horizon history [--clear]       # histórico
+ *   horizon doctor                  # checar deps
+ *   horizon stats                   # dashboard
+ *   horizon logs [-n 50] [--path]   # logs
  *   horizon update [--ytdlp] [--self] [--all]
- *   horizon subs <add|list|remove>
- *   horizon sync
+ *   horizon subs <add|list|remove>  # inscrições
+ *   horizon sync                    # baixar novidades das inscrições
  *   horizon queue <run|retry|clear|list>
- *   horizon export <playlist>
- *   horizon lyrics <playlist>
+ *   horizon export <playlist>       # gera .m3u + README.md
+ *   horizon lyrics <playlist>       # baixa .lrc das músicas da pasta
  *   horizon completion <bash|zsh|fish>
- *
- * Novos em v2.2:
- *   horizon antiban <status|reset|test>
- *   horizon scan [--rebuild]
- *   horizon backup [--out <file>]
- *   horizon restore <file> [--no-merge]
- *   horizon health
  */
 
 import chalk from 'chalk';
@@ -54,7 +47,7 @@ import {
     downloadPlaylist,
 } from './src/downloader.js';
 import { loadHistory, clearHistory, summary, topPlaylists } from './src/history.js';
-import { showSplash, showOtherPlatformsTip, askPlaylist, settingsMenu } from './src/ui.js';
+import { showSplash, showOtherPlatformsTip, askPlaylist, askSettings } from './src/ui.js';
 import { renderDashboard } from './src/stats.js';
 import { tailLogs, getLogPath, getLogDir, log } from './src/logger.js';
 import { updateYtDlp, updateSelf } from './src/updater.js';
@@ -65,15 +58,6 @@ import { runQueue, previewQueue } from './src/queueRunner.js';
 import { exportAll, listPlaylistFolders, listAudioFiles } from './src/export.js';
 import { saveLyricsForFolder } from './src/lyrics.js';
 import { getCompletion } from './src/completions.js';
-import {
-    circuitStatus,
-    circuitOpen,
-    resetCircuit,
-    ANTIBAN_MODES,
-} from './src/antiban.js';
-import { rebuildArchive, scanLibrary } from './src/scanner.js';
-import { createBackup, restoreBackup } from './src/backup.js';
-import { runHealthCheck, prettyPrintHealth } from './src/health.js';
 
 // ============================================================
 //  AÇÕES DE ALTO NÍVEL
@@ -92,7 +76,7 @@ async function doSingleSearch(term, playlist) {
         spinner.success();
         choices = results.map((r) => ({ name: r.title, value: r.videoId }));
     } catch {
-        spinner.error({ text: 'Erro na busca. Verifique a conexão ou aumente a proteção anti-ban.' });
+        spinner.error({ text: 'Erro na busca. Verifique a conexão.' });
         return;
     }
 
@@ -155,7 +139,7 @@ async function doBatch(items, options = {}) {
     const start = Date.now();
     console.log(
         chalk.yellow(
-            `\n🚀 Modo lote: ${list.length} itens | pasta: ${folder} | paralelos: ${concurrency} | proteção: ${settings.antibanMode}\n`,
+            `\n🚀 Modo lote: ${list.length} itens | pasta: ${folder} | paralelo: ${concurrency}\n`,
         ),
     );
 
@@ -179,7 +163,11 @@ async function doBatch(items, options = {}) {
         onProgress: (ev) => {
             if (ev.type === 'end') {
                 bar.update(ev.done, { task: ev.target.slice(0, 60) });
-                notify('Horizon CLI (Lote)', `[${ev.done}/${ev.total}] ${ev.target}`, 'progresso');
+                notify(
+                    'Horizon CLI (Lote)',
+                    `[${ev.done}/${ev.total}] ${ev.target}`,
+                    'progresso',
+                );
             }
         },
     });
@@ -194,16 +182,6 @@ async function doBatch(items, options = {}) {
             (err ? chalk.red(`, ${err} falhas`) : ''),
     );
     notify('Horizon CLI', `🎉 Lote pronto: ${ok}/${results.length}`, 'sucesso');
-
-    const st = circuitStatus();
-    if (st.openedAt) {
-        console.log(
-            chalk.yellow(
-                `\n⛔ Proteção anti-ban foi ativada (${st.reason}). ` +
-                    `Rode \`horizon antiban status\` ou aumente o perfil em \`horizon config\`.`,
-            ),
-        );
-    }
 }
 
 async function doPlaylistUrl(url, playlist) {
@@ -256,6 +234,13 @@ async function browseLocalPlaylists() {
     return browseLocalPlaylists();
 }
 
+async function doConfig() {
+    const answers = await askSettings();
+    const saved = saveSettings(answers);
+    console.log(chalk.green('\n✅ Preferências salvas:'));
+    console.log(chalk.gray(JSON.stringify(saved, null, 2)));
+}
+
 function doHistory({ clear = false } = {}) {
     if (clear) {
         clearHistory();
@@ -272,7 +257,7 @@ function doHistory({ clear = false } = {}) {
 
     const top = topPlaylists(5);
     if (top.length) {
-        console.log(chalk.cyan('  🏆 Pastas mais usadas:'));
+        console.log(chalk.cyan('  🏆 Top playlists:'));
         top.forEach(({ playlist, count }) => {
             console.log(`    ${chalk.white(playlist)}  ${chalk.gray(`(${count})`)}`);
         });
@@ -359,7 +344,9 @@ async function doSync({ runNow = true } = {}) {
     if (runNow && res.enqueued > 0) {
         console.log(chalk.cyanBright('\n🚀 Executando fila...\n'));
         const out = await runQueue();
-        console.log(chalk.green(`\n✅ Processados ${out.processed}: ${out.ok} ok, ${out.err} err.`));
+        console.log(
+            chalk.green(`\n✅ Processados ${out.processed}: ${out.ok} ok, ${out.err} err.`),
+        );
     }
 }
 
@@ -481,124 +468,16 @@ function doCompletion(shell) {
     process.stdout.write(script);
 }
 
-// -------------------- Novos em v2.2 --------------------
-
-function doAntibanStatus() {
-    const settings = loadSettings();
-    const mode = ANTIBAN_MODES[settings.antibanMode] || ANTIBAN_MODES.seguro;
-    const st = circuitStatus();
-    const open = circuitOpen();
-    console.log(chalk.blueBright('\n🛡️  Proteção anti-bloqueio\n'));
-    console.log(chalk.white('  Perfil atual: ') + chalk.yellow(settings.antibanMode));
-    console.log(chalk.gray(`    ${mode.label}`));
-    console.log(
-        chalk.white('  Cookies:      ') +
-            (settings.useCookies ? chalk.green(`on (${settings.cookiesBrowser})`) : chalk.gray('off')),
-    );
-    console.log(
-        chalk.white('  User-Agent:   ') +
-            (settings.rotateUserAgent ? chalk.green('rotativo') : chalk.gray('fixo')),
-    );
-    console.log(
-        chalk.white('  Geo-bypass:   ') + (settings.geoBypass ? chalk.green('on') : chalk.gray('off')),
-    );
-    console.log(chalk.white('\n  Circuit breaker:'));
-    console.log(chalk.gray(`    falhas seguidas: ${st.failures || 0}`));
-    if (open.open) {
-        const min = Math.ceil(open.remainingMs / 60_000);
-        console.log(chalk.red(`    ABERTO (~${min}min restantes) — motivo: ${open.reason}`));
-    } else {
-        console.log(chalk.green('    FECHADO — tudo certo'));
-    }
-    console.log('');
-}
-
-function doAntibanReset() {
-    resetCircuit();
-    console.log(chalk.green('✅ Circuit breaker resetado. Downloads liberados.'));
-}
-
-async function doAntibanTest() {
-    console.log(chalk.cyan('\n🧪 Testando download com a proteção atual...\n'));
-    const report = await runHealthCheck();
-    prettyPrintHealth(report);
-}
-
-function doScan({ rebuild = false } = {}) {
-    console.log(chalk.cyan('\n🔎 Escaneando biblioteca local...\n'));
-    const spinner = createSpinner('lendo arquivos...').start();
-    let lastFolder = '';
-    const fn = rebuild ? rebuildArchive : scanLibrary;
-    const res = fn({
-        onProgress: ({ folder, totalScanned }) => {
-            if (folder !== lastFolder) {
-                lastFolder = folder;
-                spinner.update({ text: `[${totalScanned}] ${folder}` });
-            }
-        },
-    });
-    spinner.success({
-        text: `${res.found} arquivos, ${res.withId} com video_id identificável.`,
-    });
-    if (rebuild) {
-        console.log(chalk.green(`✅ Arquivo dedup ganhou ${res.added} novas entradas.`));
-        console.log(chalk.gray(`   ${res.archiveFile}`));
-    }
-    if (res.missing?.length) {
-        const sample = res.missing.slice(0, 3).map((m) => '    - ' + m).join('\n');
-        console.log(
-            chalk.yellow(
-                `\n⚠️  ${res.missing.length} arquivos sem video_id detectável (eles não serão protegidos pelo dedup).\n${sample}${res.missing.length > 3 ? '\n    ...' : ''}`,
-            ),
-        );
-    }
-}
-
-function doBackup({ out } = {}) {
-    const res = createBackup(out);
-    if (res.ok) console.log(chalk.green(`✅ Backup salvo em: ${res.file}`));
-}
-
-function doRestore(file, { merge = true } = {}) {
-    if (!file) {
-        console.log(chalk.red('❌ Informe o arquivo de backup.'));
-        return;
-    }
-    const res = restoreBackup(file, { merge });
-    if (res.ok) {
-        console.log(chalk.green(`✅ Restaurado: ${res.restored.join(', ')}`));
-    } else {
-        console.log(chalk.red(`❌ ${res.reason}`));
-    }
-}
-
-async function doHealth() {
-    const report = await runHealthCheck();
-    prettyPrintHealth(report);
-}
-
 // ============================================================
 //  MENU INTERATIVO
 // ============================================================
 
 async function mainMenu() {
     showSplash();
-
     const q = queueStats();
     if (q.pending) {
-        console.log(chalk.yellow(`  ⚡ Fila pendente: ${q.pending} itens. Use "Fila" no menu.`));
+        console.log(chalk.yellow(`  ⚡ Fila pendente: ${q.pending} itens. Use "Fila" no menu.\n`));
     }
-    const circuit = circuitOpen();
-    if (circuit.open) {
-        const min = Math.ceil(circuit.remainingMs / 60_000);
-        console.log(
-            chalk.redBright(
-                `  ⛔ Proteção anti-ban ATIVA (~${min}min) — motivo: ${circuit.reason}`,
-            ),
-        );
-    }
-    console.log('');
-
     const { action } = await inquirer.prompt([
         {
             type: 'rawlist',
@@ -613,14 +492,11 @@ async function mainMenu() {
                 { name: '📊  Dashboard', value: 'dashboard' },
                 { name: '📜  Histórico', value: 'history' },
                 { name: '⚙️   Configurações', value: 'config' },
-                { name: '🛡️   Proteção anti-bloqueio', value: 'antiban' },
-                { name: '🩺  Diagnóstico (doctor + health)', value: 'diagnose' },
-                { name: '🔎  Escanear biblioteca (reconstruir dedup)', value: 'scan' },
-                { name: '💾  Backup / Restaurar', value: 'backup' },
                 { name: '🎤  Baixar letras (.lrc) de uma pasta', value: 'lyrics' },
                 { name: '📤  Exportar .m3u + README de uma pasta', value: 'export' },
                 { name: '📝  Ver logs', value: 'logs' },
                 { name: '🔄  Atualizar yt-dlp / Horizon', value: 'update' },
+                { name: '🩺  Doctor (checar dependências)', value: 'doctor' },
                 { name: '❌  Sair', value: 'exit' },
             ],
         },
@@ -711,68 +587,8 @@ async function mainMenu() {
             doHistory();
             break;
         case 'config':
-            await settingsMenu();
+            await doConfig();
             break;
-        case 'antiban': {
-            const { a } = await inquirer.prompt([
-                {
-                    type: 'rawlist',
-                    name: 'a',
-                    message: 'Proteção anti-bloqueio:',
-                    choices: [
-                        { name: 'Ver status', value: 'status' },
-                        { name: 'Rodar teste de download', value: 'test' },
-                        { name: 'Resetar circuit breaker', value: 'reset' },
-                        { name: 'Editar perfil em Configurações', value: 'cfg' },
-                        { name: '⬅️  Voltar', value: 'back' },
-                    ],
-                },
-            ]);
-            if (a === 'status') doAntibanStatus();
-            else if (a === 'test') await doAntibanTest();
-            else if (a === 'reset') doAntibanReset();
-            else if (a === 'cfg') await settingsMenu();
-            break;
-        }
-        case 'diagnose': {
-            checkDependencies();
-            await doHealth();
-            break;
-        }
-        case 'scan': {
-            const { rebuild } = await inquirer.prompt([
-                {
-                    type: 'confirm',
-                    name: 'rebuild',
-                    message: 'Reconstruir o arquivo de dedup com o que for encontrado?',
-                    default: true,
-                },
-            ]);
-            doScan({ rebuild });
-            break;
-        }
-        case 'backup': {
-            const { b } = await inquirer.prompt([
-                {
-                    type: 'rawlist',
-                    name: 'b',
-                    message: 'Backup / Restore:',
-                    choices: [
-                        { name: 'Criar backup', value: 'create' },
-                        { name: 'Restaurar (mesclando)', value: 'restore' },
-                        { name: '⬅️  Voltar', value: 'back' },
-                    ],
-                },
-            ]);
-            if (b === 'create') doBackup();
-            else if (b === 'restore') {
-                const { file } = await inquirer.prompt([
-                    { type: 'input', name: 'file', message: 'Caminho do arquivo de backup:' },
-                ]);
-                if (file) doRestore(file);
-            }
-            break;
-        }
         case 'lyrics': {
             const folders = listPlaylistFolders();
             if (!folders.length) {
@@ -817,6 +633,9 @@ async function mainMenu() {
             if (what !== 'back') doUpdate({ [what]: true });
             break;
         }
+        case 'doctor':
+            checkDependencies();
+            break;
         case 'exit':
             console.log(chalk.green('\n👋  Até a próxima.\n'));
             process.exit(0);
@@ -834,7 +653,7 @@ const program = new Command();
 program
     .name('horizon')
     .description('Horizon CLI — ecossistema musical no terminal')
-    .version('2.2.0');
+    .version('2.1.0');
 
 program
     .command('search <termo...>')
@@ -893,9 +712,9 @@ program
 
 program
     .command('config')
-    .description('Editar preferências em seções (biblioteca, áudio, desempenho, anti-ban)')
+    .description('Editar preferências (formato, qualidade, concorrência...)')
     .action(async () => {
-        await settingsMenu();
+        await doConfig();
         process.exit(0);
     });
 
@@ -905,14 +724,6 @@ program
     .action(() => {
         const { allOk } = checkDependencies();
         process.exit(allOk ? 0 : 1);
-    });
-
-program
-    .command('health')
-    .description('Rodar um download de teste pra ver se tudo está funcionando')
-    .action(async () => {
-        await doHealth();
-        process.exit(0);
     });
 
 program
@@ -944,8 +755,16 @@ program
         process.exit(0);
     });
 
-const subsCmd = program.command('subs').description('Gerenciar inscrições (playlists/canais)');
-subsCmd.command('list').description('Listar inscrições').action(() => { doSubsList(); process.exit(0); });
+const subsCmd = program
+    .command('subs')
+    .description('Gerenciar inscrições (playlists/canais)');
+subsCmd
+    .command('list')
+    .description('Listar inscrições')
+    .action(() => {
+        doSubsList();
+        process.exit(0);
+    });
 subsCmd
     .command('add <url>')
     .description('Adicionar inscrição')
@@ -958,7 +777,10 @@ subsCmd
 subsCmd
     .command('remove <id>')
     .description('Remover inscrição (por id ou URL)')
-    .action((id) => { doSubsRemove(id); process.exit(0); });
+    .action((id) => {
+        doSubsRemove(id);
+        process.exit(0);
+    });
 
 program
     .command('sync')
@@ -970,58 +792,64 @@ program
         process.exit(0);
     });
 
-const queueCmd = program.command('queue').description('Gerenciar fila persistente');
-queueCmd.command('list').description('Ver fila').action(() => { doQueueList(); process.exit(0); });
-queueCmd.command('run').description('Processar fila pendente')
-    .action(async () => { requireDependencies(); await doQueueRun(); process.exit(0); });
-queueCmd.command('retry').description('Re-enfileirar os itens que falharam')
-    .action(() => { doQueueRetry(); process.exit(0); });
-queueCmd.command('clear [scope]').description('Limpar fila (all | pending | completed | failed)')
-    .action((scope) => { doQueueClear(scope); process.exit(0); });
+const queueCmd = program
+    .command('queue')
+    .description('Gerenciar fila persistente');
+queueCmd
+    .command('list')
+    .description('Ver fila')
+    .action(() => {
+        doQueueList();
+        process.exit(0);
+    });
+queueCmd
+    .command('run')
+    .description('Processar fila pendente')
+    .action(async () => {
+        requireDependencies();
+        await doQueueRun();
+        process.exit(0);
+    });
+queueCmd
+    .command('retry')
+    .description('Re-enfileirar os itens que falharam')
+    .action(() => {
+        doQueueRetry();
+        process.exit(0);
+    });
+queueCmd
+    .command('clear [scope]')
+    .description('Limpar fila (all | pending | completed | failed)')
+    .action((scope) => {
+        doQueueClear(scope);
+        process.exit(0);
+    });
 
 program
     .command('export <playlist>')
     .description('Gerar .m3u + README.md para uma pasta de playlist')
-    .action((folder) => { doExport(folder); process.exit(0); });
+    .action((folder) => {
+        doExport(folder);
+        process.exit(0);
+    });
 
 program
     .command('lyrics <playlist>')
     .description('Baixar letras .lrc das músicas de uma pasta')
-    .action(async (folder) => { await doLyrics(folder); process.exit(0); });
+    .action(async (folder) => {
+        await doLyrics(folder);
+        process.exit(0);
+    });
 
 program
     .command('completion <shell>')
     .description('Gerar script de auto-complete (bash|zsh|fish)')
-    .action((shell) => { doCompletion(shell); process.exit(0); });
+    .action((shell) => {
+        doCompletion(shell);
+        process.exit(0);
+    });
 
-// Novos v2.2:
-const antibanCmd = program.command('antiban').description('Proteção contra bloqueios do YouTube');
-antibanCmd.command('status').description('Ver estado da proteção e circuit breaker')
-    .action(() => { doAntibanStatus(); process.exit(0); });
-antibanCmd.command('reset').description('Resetar o circuit breaker (libera downloads)')
-    .action(() => { doAntibanReset(); process.exit(0); });
-antibanCmd.command('test').description('Testar download real com a proteção atual')
-    .action(async () => { await doAntibanTest(); process.exit(0); });
-
-program
-    .command('scan')
-    .description('Escanear biblioteca local (opcional: reconstruir dedup)')
-    .option('--rebuild', 'reconstrói o arquivo de dedup com o que encontrar')
-    .action((opts) => { doScan(opts); process.exit(0); });
-
-program
-    .command('backup')
-    .description('Criar backup das configurações, inscrições, histórico e dedup')
-    .option('--out <file>', 'caminho de saída')
-    .action((opts) => { doBackup(opts); process.exit(0); });
-
-program
-    .command('restore <file>')
-    .description('Restaurar backup (mescla por padrão)')
-    .option('--no-merge', 'sobrescreve em vez de mesclar')
-    .action((file, opts) => { doRestore(file, { merge: opts.merge !== false }); process.exit(0); });
-
-// Sem argumentos → menu interativo.
+// Sem argumentos: menu interativo.
 if (process.argv.length <= 2) {
     requireDependencies();
     mainMenu().catch((err) => {

@@ -1,10 +1,6 @@
 /**
  * HORIZON CLI — Config
  * Caminhos, constantes e configurações globais.
- *
- * As preferências do usuário ficam em ~/.horizon/settings.json e agora
- * incluem pasta base editável, perfil de anti-ban, cookies do navegador,
- * normalização de volume e idioma da interface.
  */
 
 import fs from 'fs';
@@ -21,20 +17,10 @@ export const SUPPORTED_FORMATS = ['mp3', 'm4a', 'opus', 'flac'];
 export const DEFAULT_CONCURRENCY = 2;
 export const MAX_CONCURRENCY = 6;
 
-/** Retorna a pasta base PADRÃO do sistema (fallback, se o usuário não escolheu uma). */
-export function getDefaultMusicBaseDir() {
+/** Base onde as playlists/pastas de música são salvas. */
+export function getMusicBaseDir() {
     if (IS_TERMUX) return '/sdcard/Music/Horizon';
     return path.join(os.homedir(), 'Music', 'Horizon');
-}
-
-/** Pasta base EFETIVA — respeita a preferência do usuário. */
-export function getMusicBaseDir() {
-    const settings = loadSettings();
-    if (settings.musicBaseDir && typeof settings.musicBaseDir === 'string') {
-        // Expande ~ para o home do usuário.
-        return settings.musicBaseDir.replace(/^~(?=$|\/|\\)/, os.homedir());
-    }
-    return getDefaultMusicBaseDir();
 }
 
 /** Diretório de configuração do app (~/.horizon). */
@@ -57,43 +43,20 @@ export function getArchiveFile() {
     return path.join(getAppDir(), 'downloaded.txt');
 }
 
-/** Valores padrão — é o "estado de fábrica" do Horizon. */
-export function defaultSettings() {
-    return {
-        // Biblioteca
-        musicBaseDir: getDefaultMusicBaseDir(),
-        defaultPlaylist: 'Geral',
-
-        // Áudio
+/** Carrega settings do usuário (quality, format, concurrency...) com defaults. */
+export function loadSettings() {
+    const file = getSettingsFile();
+    const defaults = {
         format: DEFAULT_FORMAT,
         quality: DEFAULT_QUALITY,
+        concurrency: DEFAULT_CONCURRENCY,
+        defaultPlaylist: 'Geral',
         embedThumbnail: true,
         embedMetadata: true,
-        normalizeVolume: false,
-
-        // Performance
-        concurrency: DEFAULT_CONCURRENCY,
-        dedup: true,
-        autoExportM3U: true,
-        writeLyrics: false,
-
-        // Anti-bloqueio
-        antibanMode: 'seguro',       // desligado | seguro | agressivo | furtivo
-        rotateUserAgent: true,
-        useCookies: false,
-        cookiesBrowser: 'chrome',    // chrome | firefox | edge | brave | safari | chromium
-        geoBypass: true,
-
-        // Interface
-        language: 'pt',              // reservado para i18n futura
-        showTips: true,
+        dedup: true,             // usa --download-archive
+        writeLyrics: false,      // baixa .lrc automaticamente após download
+        autoExportM3U: true,     // atualiza .m3u ao final de batch/playlist
     };
-}
-
-/** Carrega settings do usuário com defaults aplicados. */
-export function loadSettings() {
-    const file = path.join(getAppDir(), 'settings.json');
-    const defaults = defaultSettings();
     if (!fs.existsSync(file)) return defaults;
     try {
         const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -108,13 +71,6 @@ export function saveSettings(patch) {
     const next = { ...current, ...patch };
     fs.writeFileSync(getSettingsFile(), JSON.stringify(next, null, 2));
     return next;
-}
-
-/** Volta tudo ao padrão (útil quando o usuário quebra a config). */
-export function resetSettings() {
-    const def = defaultSettings();
-    fs.writeFileSync(getSettingsFile(), JSON.stringify(def, null, 2));
-    return def;
 }
 
 /** Sanitiza nome de pasta/arquivo pra remover caracteres perigosos. */
