@@ -1,6 +1,7 @@
 /**
  * HORIZON CLI — Downloader
- * Constrói comandos yt-dlp e executa downloads com concorrência, retry e histórico.
+ * Constrói comandos yt-dlp e executa downloads com concorrência, retry,
+ * dedup (download-archive), histórico, lyrics e exportação M3U.
  */
 
 import { exec } from 'child_process';
@@ -11,10 +12,12 @@ import {
     getMusicBaseDir,
     loadSettings,
     sanitizeName,
+    getArchiveFile,
 } from './config.js';
 import { shellEscape, isYoutubeUrl, retry } from './utils.js';
 import { addHistoryEntry, addFailure } from './history.js';
 import { refreshGallery } from './notifier.js';
+import { log } from './logger.js';
 
 const execPromise = util.promisify(exec);
 
@@ -26,6 +29,20 @@ export function ensurePlaylistDir(playlistName) {
     return dir;
 }
 
+/** Retorna o arquivo de áudio mais recente da pasta, ou null. */
+function latestAudioIn(dir) {
+    if (!fs.existsSync(dir)) return null;
+    const files = fs
+        .readdirSync(dir)
+        .filter((f) => /\.(mp3|m4a|opus|flac)$/i.test(f))
+        .map((name) => {
+            const full = path.join(dir, name);
+            return { name, full, mtime: fs.statSync(full).mtimeMs };
+        })
+        .sort((a, b) => b.mtime - a.mtime);
+    return files[0] || null;
+}
+
 /** Monta o comando yt-dlp com todas as flags de acordo com settings. */
 export function buildYtdlpCommand({
     target,
@@ -35,7 +52,7 @@ export function buildYtdlpCommand({
     overrides = {},
 }) {
     const settings = { ...loadSettings(), ...overrides };
-    const { format, quality, embedThumbnail, embedMetadata } = settings;
+    const { format, quality, embedThumbnail, embedMetadata, dedup } = settings;
 
     const sourceArg = isSearchTerm
         ? shellEscape(`ytsearch1:${target}`)
@@ -57,9 +74,32 @@ export function buildYtdlpCommand({
     ];
     if (embedThumbnail) args.push('--embed-thumbnail');
     if (embedMetadata) args.push('--add-metadata');
+    if (dedup) args.push('--download-archive', shellEscape(getArchiveFile()));
     args.push('-o', outputTemplate);
 
     return args.join(' ');
+}
+
+/** Hook pós-download: lyrics + export M3U (se habilitados). */
+async function postProcess({ dir, settings }) {
+    if (settings.autoExportM3U) {
+        try {
+            const { exportAll } = await import('./export.js');
+            const pl = path.basename(dir);
+            exportAll(pl);
+        } catch (err) {
+            log.warn(`postProcess: m3u failed: ${err.message}`);
+        }
+    }
+    if (settings.writeLyrics) {
+        try {
+            const { saveLyricsFor } = await import('./lyrics.js');
+            const latest = latestAudioIn(dir);
+            if (latest) await saveLyricsFor(latest.full);
+        } catch (err) {
+            log.warn(`postProcess: lyrics failed: ${err.message}`);
+        }
+    }
 }
 
 /** Download individual com retry e histórico. */
@@ -70,6 +110,7 @@ export async function downloadOne({
     overrides = {},
     onProgress = () => {},
 }) {
+    const settings = { ...loadSettings(), ...overrides };
     const dir = ensurePlaylistDir(playlist);
     const cmd = buildYtdlpCommand({
         target,
@@ -79,13 +120,16 @@ export async function downloadOne({
         overrides,
     });
 
+    log.info(`download: start ${target} → ${playlist}`);
     try {
         await retry(() => execPromise(cmd, { maxBuffer: 1024 * 1024 * 50 }), {
             retries: 2,
             baseDelay: 2500,
         });
         refreshGallery(dir);
+        await postProcess({ dir, settings });
         addHistoryEntry({ target, playlist, mode: isSearchTerm ? 'search' : 'url' });
+        log.info(`download: ok ${target}`);
         onProgress({ ok: true, target });
         return { ok: true, dir };
     } catch (err) {
@@ -95,6 +139,7 @@ export async function downloadOne({
             mode: isSearchTerm ? 'search' : 'url',
             error: String(err?.message || err).slice(0, 300),
         });
+        log.error(`download: fail ${target}: ${err?.message || err}`);
         onProgress({ ok: false, target, error: err });
         return { ok: false, error: err };
     }
@@ -105,10 +150,12 @@ export async function downloadPlaylist({
     url,
     playlist = 'MinhaPlaylist',
     overrides = {},
+    silent = false,
 }) {
     if (!isYoutubeUrl(url)) {
         throw new Error('URL inválida. Forneça um link do YouTube.');
     }
+    const settings = { ...loadSettings(), ...overrides };
     const dir = ensurePlaylistDir(playlist);
     const cmd = buildYtdlpCommand({
         target: url,
@@ -118,15 +165,19 @@ export async function downloadPlaylist({
         overrides,
     });
 
-    // Playlist inteira: repassamos stdio para o usuário ver o progresso do yt-dlp.
+    log.info(`playlist: start ${url} → ${playlist}`);
     return new Promise((resolve) => {
         const child = exec(cmd, { maxBuffer: 1024 * 1024 * 200 });
-        child.stdout?.pipe(process.stdout);
-        child.stderr?.pipe(process.stderr);
-        child.on('exit', (code) => {
+        if (!silent) {
+            child.stdout?.pipe(process.stdout);
+            child.stderr?.pipe(process.stderr);
+        }
+        child.on('exit', async (code) => {
             refreshGallery(dir);
             if (code === 0) {
+                await postProcess({ dir, settings });
                 addHistoryEntry({ target: url, playlist, mode: 'playlist' });
+                log.info(`playlist: ok ${url}`);
                 resolve({ ok: true, dir });
             } else {
                 addFailure({
@@ -135,6 +186,7 @@ export async function downloadPlaylist({
                     mode: 'playlist',
                     error: `exit code ${code}`,
                 });
+                log.error(`playlist: fail ${url} exit=${code}`);
                 resolve({ ok: false, code });
             }
         });

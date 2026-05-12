@@ -103,6 +103,24 @@ export async function askSettings() {
             message: 'Embutir metadados (título, artista)?',
             default: current.embedMetadata,
         },
+        {
+            type: 'confirm',
+            name: 'dedup',
+            message: 'Evitar baixar o mesmo vídeo duas vezes (download-archive)?',
+            default: current.dedup,
+        },
+        {
+            type: 'confirm',
+            name: 'writeLyrics',
+            message: 'Baixar letras (.lrc) automaticamente após cada música?',
+            default: current.writeLyrics,
+        },
+        {
+            type: 'confirm',
+            name: 'autoExportM3U',
+            message: 'Gerar .m3u e README.md automaticamente na pasta da playlist?',
+            default: current.autoExportM3U,
+        },
     ]);
     return answers;
 }

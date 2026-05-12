@@ -38,6 +38,11 @@ export function getSettingsFile() {
     return path.join(getAppDir(), 'settings.json');
 }
 
+/** Arquivo de dedup global do yt-dlp. Evita re-baixar o mesmo vídeo. */
+export function getArchiveFile() {
+    return path.join(getAppDir(), 'downloaded.txt');
+}
+
 /** Carrega settings do usuário (quality, format, concurrency...) com defaults. */
 export function loadSettings() {
     const file = getSettingsFile();
@@ -48,6 +53,9 @@ export function loadSettings() {
         defaultPlaylist: 'Geral',
         embedThumbnail: true,
         embedMetadata: true,
+        dedup: true,             // usa --download-archive
+        writeLyrics: false,      // baixa .lrc automaticamente após download
+        autoExportM3U: true,     // atualiza .m3u ao final de batch/playlist
     };
     if (!fs.existsSync(file)) return defaults;
     try {

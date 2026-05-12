@@ -35,6 +35,19 @@ export function addHistoryEntry(entry) {
     saveHistory(entries);
 }
 
+/** Top-N playlists mais baixadas. */
+export function topPlaylists(n = 5) {
+    const counts = new Map();
+    for (const e of loadHistory()) {
+        if (e.status !== 'ok') continue;
+        counts.set(e.playlist, (counts.get(e.playlist) || 0) + 1);
+    }
+    return [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, n)
+        .map(([playlist, count]) => ({ playlist, count }));
+}
+
 export function addFailure(entry) {
     addHistoryEntry({ ...entry, status: 'error' });
 }
