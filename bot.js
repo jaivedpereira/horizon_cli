@@ -1,152 +1,377 @@
+/**
+ * HORIZON BOT — Telegram
+ *
+ * Melhorias v2:
+ *  - Whitelist de usuários (opcional) via ALLOWED_USER_IDS.
+ *  - Fila de jobs por usuário (evita corrida de estados).
+ *  - Rate-limit simples (cooldown entre mensagens).
+ *  - Mensagens editadas em vez de spam (anti-spam).
+ *  - Comandos: /start, /help, /search, /stats, /cancel.
+ *  - Graceful shutdown (SIGINT / SIGTERM).
+ *  - Reusa a camada src/ (downloader, history, config, utils).
+ */
+
 import { Telegraf, Markup } from 'telegraf';
-import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-import util from 'util';
+
+import { getMusicBaseDir, loadSettings, sanitizeName } from './src/config.js';
+import { isYoutubeUrl, isOtherPlatform, isPlaylistUrl } from './src/utils.js';
+import {
+    searchYoutube,
+    downloadOne,
+    downloadPlaylist,
+} from './src/downloader.js';
+import { requireDependencies } from './src/deps.js';
+import { summary } from './src/history.js';
 
 dotenv.config();
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
-    console.error("❌ ERRO: Token não encontrado no arquivo .env");
+    console.error('❌ ERRO: BOT_TOKEN não encontrado no .env');
+    console.error('   Copie .env.example para .env e preencha seu token.');
     process.exit(1);
 }
 
+requireDependencies();
+
+const ALLOWED = String(process.env.ALLOWED_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const RATE_LIMIT_MS = Number(process.env.RATE_LIMIT_MS || 1500);
+const MAX_FILE_MB_TELEGRAM = 49; // limite prático do Telegram ~50MB p/ bots normais
+
 const bot = new Telegraf(BOT_TOKEN);
-const baseDir = "/sdcard/Music/Horizon";
-const execPromise = util.promisify(exec);
 
-// Memória temporária para guardar a escolha do usuário
+// Estado por usuário: { step, url|videoId, lastMsgAt, busy }
 const userState = new Map();
+function getState(userId) {
+    if (!userState.has(userId)) userState.set(userId, {});
+    return userState.get(userId);
+}
 
-bot.start((ctx) => {
+// ============================================================
+//  MIDDLEWARES
+// ============================================================
+
+// Whitelist (se configurada).
+bot.use(async (ctx, next) => {
+    if (!ALLOWED.length) return next();
+    const id = String(ctx.from?.id || '');
+    if (!ALLOWED.includes(id)) {
+        return ctx.reply('⛔ Acesso restrito. Seu ID não está na whitelist.');
+    }
+    return next();
+});
+
+// Rate-limit simples.
+bot.use(async (ctx, next) => {
+    const uid = ctx.from?.id;
+    if (!uid) return next();
+    const st = getState(uid);
+    const now = Date.now();
+    if (st.lastMsgAt && now - st.lastMsgAt < RATE_LIMIT_MS) {
+        return ctx.reply('⏱️  Calma aí! Aguarde um instante entre mensagens.');
+    }
+    st.lastMsgAt = now;
+    return next();
+});
+
+// ============================================================
+//  COMANDOS
+// ============================================================
+
+bot.start((ctx) =>
     ctx.reply(
-        '🌌 *Horizon Bot!*\n\n' +
-        'Envie o nome da música para buscar, ou cole um link do YouTube.\n\n' +
-        '💡 *DICA PARA SPOTIFY / DEEZER:*\n' +
-        'O Horizon baixa nativamente do YouTube. Se tiver uma playlist em outro app, acesse *TuneMyMusic.com*, converta para o YouTube e cole o link aqui!',
-        { parse_mode: 'Markdown' }
+        '🌌 *Horizon Bot v2*\n\n' +
+            'Envie o nome de uma música, um link do YouTube ou uma playlist do YouTube.\n\n' +
+            '📌 Comandos:\n' +
+            '/search <termo> — buscar 5 opções\n' +
+            '/stats — estatísticas de download\n' +
+            '/cancel — cancelar a ação atual\n' +
+            '/help — ajuda detalhada\n\n' +
+            '💡 *Spotify/Deezer/Apple:* converta sua playlist em *TuneMyMusic.com* e cole o link do YouTube aqui.',
+        { parse_mode: 'Markdown' },
+    ),
+);
+
+bot.command('help', (ctx) =>
+    ctx.reply(
+        '📖 *Ajuda Horizon*\n\n' +
+            '• Mande um *nome* → mostro 5 opções.\n' +
+            '• Mande um *link do YouTube* → baixo direto.\n' +
+            '• Mande uma *playlist do YouTube* → baixo tudo.\n' +
+            '• /stats — total baixado / erros.\n' +
+            '• /cancel — cancela o passo atual.\n\n' +
+            '⚙️  Configurações (formato/qualidade) são editadas pelo CLI: `horizon config`',
+        { parse_mode: 'Markdown' },
+    ),
+);
+
+bot.command('cancel', (ctx) => {
+    userState.delete(ctx.from.id);
+    return ctx.reply('🚫 Ação cancelada.');
+});
+
+bot.command('stats', (ctx) => {
+    const s = summary();
+    return ctx.reply(
+        `📊 *Estatísticas*\n\n` +
+            `Total: ${s.total}\n` +
+            `✅ Sucesso: ${s.ok}\n` +
+            `❌ Erros: ${s.err}`,
+        { parse_mode: 'Markdown' },
     );
 });
 
-// Quando o usuário envia um texto
-bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    const text = ctx.message.text.trim();
+bot.command('search', async (ctx) => {
+    const q = ctx.message.text.replace(/^\/search\s*/i, '').trim();
+    if (!q) return ctx.reply('Uso: /search <termo>');
+    return handleSearchQuery(ctx, q);
+});
 
-    // 1. ALERTA INTELIGENTE PARA OUTRAS PLATAFORMAS (TuneMyMusic)
-    if (text.includes('spotify.com') || text.includes('deezer.com') || text.includes('apple.com')) {
+// ============================================================
+//  HANDLERS
+// ============================================================
+
+async function handleSearchQuery(ctx, query) {
+    const msg = await ctx.reply(`🔍 Buscando: "${query}"...`);
+    try {
+        const results = await searchYoutube(query, 5);
+        if (!results.length) {
+            return ctx.telegram.editMessageText(
+                ctx.chat.id,
+                msg.message_id,
+                undefined,
+                '⚠️ Nenhum resultado.',
+            );
+        }
+        const buttons = results.map((r) => [
+            Markup.button.callback(r.title.slice(0, 55), `dl_${r.videoId}`),
+        ]);
+        buttons.push([Markup.button.callback('❌ Cancelar', 'cancel')]);
+        await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            msg.message_id,
+            undefined,
+            '🎵 Escolha a versão:',
+            Markup.inlineKeyboard(buttons),
+        );
+    } catch (err) {
+        await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            msg.message_id,
+            undefined,
+            '❌ Erro na busca.',
+        );
+    }
+}
+
+async function performDownload(ctx, statusMsg, target, playlistName, isPlaylist) {
+    const folder = sanitizeName(playlistName);
+    try {
+        if (isPlaylist) {
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                `📦 Baixando playlist em "${folder}"... isso pode demorar.`,
+            );
+            const res = await downloadPlaylist({ url: target, playlist: folder });
+            const finalTxt = res.ok
+                ? `✅ Playlist salva em: Horizon/${folder}`
+                : '❌ Erro ao baixar a playlist.';
+            return ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                finalTxt,
+            );
+        }
+
+        await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMsg.message_id,
+            undefined,
+            `⏳ Baixando em "${folder}"...`,
+        );
+
+        const res = await downloadOne({
+            target,
+            playlist: folder,
+            isSearchTerm: !isYoutubeUrl(target),
+        });
+
+        if (!res.ok) {
+            return ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                '❌ Erro no download. O YouTube pode ter bloqueado ou o link é inválido.',
+            );
+        }
+
+        // Envia o arquivo mais recente do diretório se couber no limite do Telegram.
+        const files = fs
+            .readdirSync(res.dir)
+            .filter((f) => /\.(mp3|m4a|opus|flac)$/i.test(f))
+            .map((name) => {
+                const full = path.join(res.dir, name);
+                const stat = fs.statSync(full);
+                return { name, full, mtime: stat.mtimeMs, sizeMB: stat.size / 1024 / 1024 };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+
+        const latest = files[0];
+        if (!latest) {
+            return ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                `✅ Salvo em: Horizon/${folder}`,
+            );
+        }
+
+        if (latest.sizeMB > MAX_FILE_MB_TELEGRAM) {
+            return ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                `✅ Salvo em: Horizon/${folder}/${latest.name}\n⚠️  Arquivo muito grande (${latest.sizeMB.toFixed(1)}MB) para envio pelo Telegram.`,
+            );
+        }
+
+        try {
+            await ctx.replyWithAudio({ source: latest.full });
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                `✅ Salvo em: Horizon/${folder}/${latest.name}`,
+            );
+        } catch (e) {
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                `✅ Salvo no celular, mas falhou o envio pelo Telegram (${e.message || 'erro'}).`,
+            );
+        }
+    } catch (err) {
+        try {
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                undefined,
+                `❌ Erro inesperado: ${String(err.message || err).slice(0, 200)}`,
+            );
+        } catch {
+            /* ignore */
+        }
+    }
+}
+
+// Mensagens de texto (roteador principal).
+bot.on('text', async (ctx) => {
+    // Ignora comandos — já tratados acima.
+    if (ctx.message.text.startsWith('/')) return;
+
+    const uid = ctx.from.id;
+    const text = ctx.message.text.trim();
+    const state = getState(uid);
+
+    if (state.busy) {
+        return ctx.reply('⏳ Ainda estou processando seu pedido anterior. Aguarde ou use /cancel.');
+    }
+
+    // Aviso de outras plataformas.
+    if (isOtherPlatform(text)) {
         return ctx.reply(
-            '💡 *AVISO: MÚSICAS DE OUTRAS PLATAFORMAS*\n\n' +
-            'Para baixar do Spotify, Deezer ou Apple Music:\n' +
-            '1. Acesse o site gratuito *TuneMyMusic.com*\n' +
-            '2. Converta sua playlist de lá para o YouTube.\n' +
-            '3. Cole o link da nova playlist do YouTube aqui no chat.',
-            { parse_mode: 'Markdown' }
+            '💡 *Spotify / Deezer / Apple Music*\n\n' +
+                '1. Acesse *TuneMyMusic.com*\n' +
+                '2. Converta sua playlist para o YouTube\n' +
+                '3. Cole o link do YouTube aqui',
+            { parse_mode: 'Markdown' },
         );
     }
 
-    // 2. SE ESTIVER ESPERANDO A PASTA (PLAYLIST)
-    if (userState.has(userId) && userState.get(userId).step === 'ESPERANDO_PLAYLIST') {
-        const data = userState.get(userId);
-        const playlistName = text;
-        const playlistDir = path.join(baseDir, playlistName);
-
-        if (!fs.existsSync(playlistDir)) fs.mkdirSync(playlistDir, { recursive: true });
-
-        // Envia a mensagem de status (Vamos editar ela depois em vez de mandar várias)
-        const statusMsg = await ctx.reply(`⏳ Iniciando os motores... Baixando em "${playlistName}".`);
-        userState.delete(userId); // Limpa a memória
-
-        const urlToDownload = data.url ? data.url : `https://youtu.be/${data.videoId}`;
-        const isPlaylist = urlToDownload.includes('list=') || urlToDownload.includes('yes-playlist');
-        const playlistArg = isPlaylist ? '--yes-playlist' : '--no-playlist';
-
-        const downloadCmd = `yt-dlp -x --audio-format mp3 ${playlistArg} --no-warnings --embed-thumbnail --add-metadata -o "${playlistDir}/%(title)s.%(ext)s" "${urlToDownload}"`;
-
+    // Se estamos esperando o nome da pasta.
+    if (state.step === 'AWAITING_FOLDER') {
+        const target = state.url || `https://youtu.be/${state.videoId}`;
+        const isPlaylist = state.forcedPlaylist || isPlaylistUrl(target);
+        const statusMsg = await ctx.reply('🚀 Iniciando download...');
+        state.busy = true;
         try {
-            await execPromise(downloadCmd);
-            
-            // Atualiza a galeria do Android silenciosamente
-            try { exec(`termux-media-scan -r "${playlistDir}"`); } catch(e) {}
-
-            if (!isPlaylist) {
-                const files = fs.readdirSync(playlistDir).filter(f => f.endsWith('.mp3'));
-                if (files.length > 0) {
-                    const latestFile = files.map(f => ({
-                        name: f,
-                        time: fs.statSync(path.join(playlistDir, f)).mtime.getTime()
-                    })).sort((a, b) => b.time - a.time)[0];
-
-                    const filePath = path.join(playlistDir, latestFile.name);
-                    
-                    try {
-                        await ctx.replyWithAudio({ source: filePath });
-                        // Edita a mensagem "Iniciando os motores..." para Sucesso! (Anti-Spam)
-                        await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, `✅ Salvo no celular em: Horizon/${playlistName}/${latestFile.name}`);
-                    } catch (e) {
-                        await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, '✅ Música salva no celular, mas o arquivo é muito grande para enviar pelo Telegram.');
-                    }
-                }
-            } else {
-                // Se for playlist, atualiza a mensagem final
-                await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, `📦 Lote concluído! Como foi uma playlist inteira, salvei todas as músicas direto no seu celular na pasta Horizon/${playlistName} para não travar o chat!`);
-            }
-
-        } catch (err) {
-            await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, '❌ Erro no download. O YouTube pode ter bloqueado ou o link é inválido.');
+            await performDownload(ctx, statusMsg, target, text, isPlaylist);
+        } finally {
+            state.busy = false;
+            userState.delete(uid);
         }
         return;
     }
 
-    // 3. SE FOR LINK DO YOUTUBE
-    const isUrl = text.startsWith('http') || text.includes('youtu');
-    if (isUrl) {
-        userState.set(userId, { step: 'ESPERANDO_PLAYLIST', url: text });
-        return ctx.reply('🔗 Link do YouTube detectado! Em qual pasta você quer salvar? (Ex: Geral, Trap)');
+    // URL do YouTube.
+    if (isYoutubeUrl(text)) {
+        state.step = 'AWAITING_FOLDER';
+        state.url = text;
+        state.forcedPlaylist = isPlaylistUrl(text);
+        const s = loadSettings();
+        return ctx.reply(
+            `🔗 Link detectado${state.forcedPlaylist ? ' *(playlist inteira)*' : ''}.\n` +
+                `Em qual pasta você quer salvar? (padrão: ${s.defaultPlaylist})`,
+            { parse_mode: 'Markdown' },
+        );
     }
 
-    // 4. NOVA BUSCA
-    const searchMsg = await ctx.reply(`🔍 Buscando as 5 melhores opções para: "${text}"...`);
-    
-    const searchCmd = `yt-dlp "ytsearch5:${text}" --get-title --get-id --no-warnings --ignore-errors --flat-playlist`;
-    
-    exec(searchCmd, async (err, stdout) => {
-        if (err) return ctx.telegram.editMessageText(ctx.chat.id, searchMsg.message_id, undefined, '❌ Erro na busca. Tente novamente.');
-        
-        const lines = stdout.trim().split('\n');
-        const buttons = [];
-        
-        for (let i = 0; i < lines.length; i += 2) {
-            if (lines[i] && lines[i+1]) {
-                const title = lines[i].substring(0, 40); 
-                const videoId = lines[i+1];
-                buttons.push([Markup.button.callback(title, `dl_${videoId}`)]);
-            }
-        }
-        
-        if (buttons.length === 0) return ctx.telegram.editMessageText(ctx.chat.id, searchMsg.message_id, undefined, '⚠️ Nenhuma música encontrada.');
-        
-        // Edita a mensagem "Buscando..." para mostrar os botões (Anti-Spam)
-        await ctx.telegram.editMessageText(ctx.chat.id, searchMsg.message_id, undefined, '🎵 Escolha a versão correta:', Markup.inlineKeyboard(buttons));
-    });
+    // Busca por termo.
+    return handleSearchQuery(ctx, text);
 });
 
-// Quando o usuário clica num botão
-bot.action(/dl_(.+)/, async (ctx) => {
-    const videoId = ctx.match[1];
-    const userId = ctx.from.id;
-    
-    userState.set(userId, { step: 'ESPERANDO_PLAYLIST', videoId: videoId });
-    
-    await ctx.answerCbQuery();
-    
-    // Apaga os botões da mensagem anterior para o chat não virar uma bagunça
+// Callback dos botões de busca.
+bot.action('cancel', async (ctx) => {
+    userState.delete(ctx.from.id);
+    await ctx.answerCbQuery('Cancelado');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    
-    ctx.reply('📁 Boa escolha! Em qual pasta você quer salvar? (Ex: Geral)');
+    return ctx.reply('🚫 Ação cancelada.');
 });
 
-bot.launch();
+bot.action(/^dl_(.+)$/, async (ctx) => {
+    const videoId = ctx.match[1];
+    const uid = ctx.from.id;
+    const state = getState(uid);
+    state.step = 'AWAITING_FOLDER';
+    state.videoId = videoId;
+    state.url = null;
+    state.forcedPlaylist = false;
 
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    const s = loadSettings();
+    return ctx.reply(`📁 Em qual pasta? (padrão: ${s.defaultPlaylist})`);
+});
+
+// ============================================================
+//  LIFECYCLE
+// ============================================================
+
+bot.catch((err, ctx) => {
+    console.error('[bot] erro no update', ctx?.updateType, err);
+});
+
+console.log('🌌 Horizon Bot iniciando...');
+console.log(`   Base Dir: ${getMusicBaseDir()}`);
+console.log(`   Whitelist: ${ALLOWED.length ? ALLOWED.join(', ') : 'aberta (sem whitelist)'}`);
+
+bot.launch().then(() => console.log('✅ Bot online.'));
+
+const shutdown = (sig) => {
+    console.log(`\n👋 ${sig} recebido. Encerrando bot...`);
+    bot.stop(sig);
+    process.exit(0);
+};
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
