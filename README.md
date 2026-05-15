@@ -7,13 +7,14 @@
 
 Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 
-**Versão atual:** `2.3.0` ("Servidor")
+**Versão atual:** `2.4.0` ("Comando Central")
 
 ---
 
 ## 📑 Sumário
 
 - [Destaques](#-destaques)
+- [Novidades v2.4](#-novidades-da-v24-comando-central)
 - [Novidades v2.3](#-novidades-da-v23-servidor)
 - [Novidades v2.2](#-novidades-da-v22-anti-ban)
 - [Instalação](#-instalação)
@@ -31,6 +32,12 @@ Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 ## ✨ Destaques
 
 - 🎵 **Busca + download** do YouTube em mp3/m4a/opus/flac
+- 🟢 **Spotify / Deezer / Apple Music** — cola o link e baixa direto (sem site externo!)
+- 🌐 **Web Dashboard** — controla tudo pelo navegador (dark-mode, REST API)
+- 🎵 **Player de terminal** — toca suas músicas no SSH/Termux com mpv/ffplay
+- 🗂️ **Organizador inteligente** — reorganiza biblioteca por artista automaticamente
+- 🎚️ **Perfis de configuração** — salva presets nomeados e alterna rápido
+- 🔔 **Push Notifications** — recebe ping no Telegram em eventos importantes
 - 🛡️ **Proteção anti-bloqueio** com 4 perfis + circuit breaker automático
 - 🔔 **Inscrições** (playlists/canais) com auto-sync incremental
 - 📦 **Fila persistente** resistente a crashes, com retries
@@ -38,15 +45,78 @@ Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 - 🔊 **Normalização de volume** (EBU R128, estilo Spotify)
 - 🎤 **Letras (.lrc)** automáticas via lyrics.ovh
 - 📤 **Exportação** de `.m3u` + `README.md` por pasta
-- 📊 **Dashboard** com gráfico ASCII dos últimos dias
+- 📊 **Dashboard ASCII** com gráfico dos últimos dias
 - 🔎 **Scanner** que reconstrói o dedup a partir dos arquivos existentes
 - 💾 **Backup / Restore** completo das configs e estado
 - 🩺 **Health check** com download de teste
 - 📝 **Logger** com rotação em `~/.horizon/logs`
 - 🔄 **Self-update** de `yt-dlp` e do próprio Horizon
-- 🤖 **Bot do Telegram** com whitelist, rate-limit e fila por usuário
+- 🤖 **Bot do Telegram** multiusuário com quota, admins e auto-cleanup
 - 🖥️  **Auto-complete** para bash, zsh e fish
 - 🇧🇷 **Configurações 100% em português**, organizadas por seção
+
+---
+
+## ✨ Novidades da v2.4 ("Comando Central")
+
+### 🌐 Web Dashboard
+Acesse `http://seuservidor:3777` no browser e controla **tudo** remotamente.
+Dashboard dark-mode profissional com cards em tempo real, busca, download,
+Spotify, sync, fila e anti-ban. Autenticação via `WEB_TOKEN`. Zero dependências extras.
+
+```bash
+horizon web                # porta padrão 3777
+horizon web --port 8080    # porta custom
+```
+
+### 🟢 Spotify / Deezer / Apple Music — SEM site externo
+Cola o link e o Horizon resolve sozinho → busca no YouTube → baixa.
+Sem API key (usa oEmbed público do Spotify).
+
+```bash
+horizon spotify "https://open.spotify.com/track/xxx"
+horizon spotify "https://open.spotify.com/playlist/xxx" --playlist MinhaLista
+horizon spotify "https://open.spotify.com/album/xxx" --preview   # só lista faixas
+```
+
+### 🎵 Player de terminal
+Toca direto no terminal via mpv/ffplay/sox. Controles: Enter=próxima, q=parar, s=shuffle.
+
+```bash
+horizon play Favs --shuffle --loop
+horizon play --list                    # lista pastas com áudio
+```
+
+### 🗂️ Smart Organizer
+Reorganiza biblioteca por artista (parse do nome do arquivo).
+
+```bash
+horizon organize Geral                 # preview do plano
+horizon organize Geral --execute       # executa de verdade
+horizon organize Geral --mode flat     # desfaz (volta tudo pra raiz)
+```
+
+### 🎚️ Perfis de Configuração
+Salva presets nomeados e alterna entre cenários (servidor, qualidade, rápido).
+
+```bash
+horizon profiles save servidor --desc "anti-ban agressivo"
+horizon profiles load qualidade
+horizon profiles list
+horizon profiles delete rapido
+```
+
+### 🔔 Push Notifications (Telegram)
+Admin recebe ping quando: circuit breaker abre, lote termina, sync acha novidades, novo usuário.
+
+```bash
+horizon notify "Deploy feito, tudo atualizado"
+```
+
+### ⚡ Fix: Downloads que falhavam
+- Resolvido "Operation not permitted" no Android (thumbnail .webp).
+- Downloads ~3-4x mais rápidos (fragmentos paralelos + sleep otimizado).
+- Nomes de arquivo sanitizados pra filesystem do Android.
 
 ---
 
@@ -639,6 +709,19 @@ horizon completion fish > ~/.config/fish/completions/horizon.fish
 | `horizon bot` | Inicia o bot do Telegram (modo servidor) |
 | `horizon schedule [-i 6]` | Sync automático em loop (foreground) |
 | `horizon cleanup` | Limpa cache efêmero do bot |
+| `horizon spotify <url>` | Resolve e baixa do Spotify/Deezer/Apple |
+| `horizon spotify <url> --preview` | Mostra faixas sem baixar |
+| `horizon play [pasta]` | Toca no terminal (mpv/ffplay) |
+| `horizon play --shuffle --loop` | Shuffle + repetir |
+| `horizon play --list` | Lista pastas tocáveis |
+| `horizon organize [pasta]` | Preview de reorganização por artista |
+| `horizon organize [pasta] --execute` | Executa a reorganização |
+| `horizon profiles list` | Lista perfis salvos |
+| `horizon profiles save <nome>` | Salva config atual como perfil |
+| `horizon profiles load <nome>` | Carrega perfil |
+| `horizon profiles delete <nome>` | Deleta perfil |
+| `horizon web [--port 3777]` | Inicia o Web Dashboard |
+| `horizon notify <msg>` | Push notification pros admins |
 
 ---
 
@@ -732,6 +815,8 @@ A partir da v2.3 o bot foi feito pra rodar em VPS / Termux / PC ligado.
 | `PLAYLIST_MAX_TRACKS` | `100` | Máx. de faixas por playlist |
 | `RATE_LIMIT_MS` | `1500` | Intervalo mín. entre mensagens |
 | `AUTO_UPDATE_YTDLP` | `0` | `1` = atualiza yt-dlp ao iniciar (recomendado) |
+| `WEB_TOKEN` | (vazio = aberto) | Token de auth do Web Dashboard |
+| `WEB_PORT` | `3777` | Porta do Web Dashboard |
 
 #### Comandos públicos (qualquer usuário)
 
@@ -803,9 +888,25 @@ horizon schedule -i 6   # roda sync a cada 6 horas
 
 ## 💡 Spotify / Deezer / Apple Music
 
-1. Acesse [TuneMyMusic.com](https://www.tunemymusic.com/)
-2. Converta sua playlist para o YouTube
-3. Cole o link do YouTube no Horizon
+A partir da v2.4, o Horizon resolve links **nativamente** — sem precisar
+de sites externos!
+
+```bash
+# Cola o link direto:
+horizon spotify "https://open.spotify.com/track/..."
+horizon spotify "https://open.spotify.com/playlist/..."
+horizon spotify "https://deezer.com/track/..."
+
+# Preview (só ver faixas sem baixar):
+horizon spotify "https://open.spotify.com/album/..." --preview
+```
+
+O resolver usa oEmbed público do Spotify (sem API key), extrai os nomes
+das faixas e busca cada uma no YouTube automaticamente.
+
+> **Fallback manual:** se o resolver não funcionar pra alguma playlist muito
+> grande, você pode converter em [TuneMyMusic.com](https://www.tunemymusic.com)
+> e colar o link do YouTube no Horizon.
 
 ---
 
@@ -813,8 +914,8 @@ horizon schedule -i 6   # roda sync a cada 6 horas
 
 ```
 horizon_cli/
-├── index.js               # CLI (menu + commander)
-├── bot.js                 # Bot do Telegram
+├── index.js               # CLI (menu + commander, 34 comandos)
+├── bot.js                 # Bot do Telegram (modo servidor)
 ├── package.json
 ├── .env.example
 ├── CHANGELOG.md
@@ -826,20 +927,28 @@ horizon_cli/
     ├── notifier.js        # notificações Termux (anti-spam)
     ├── history.js         # histórico JSON + top playlists
     ├── downloader.js      # yt-dlp + concorrência + dedup + anti-ban
-    ├── antiban.js         # ✨ perfis, flags, circuit breaker
-    ├── scanner.js         # ✨ rebuild do dedup a partir do disco
-    ├── backup.js          # ✨ backup/restore JSON
-    ├── health.js          # ✨ download de teste
+    ├── antiban.js         # perfis, flags, circuit breaker
+    ├── scanner.js         # rebuild do dedup a partir do disco
+    ├── backup.js          # backup/restore JSON
+    ├── health.js          # download de teste
+    ├── botState.js        # estado persistente do bot (usuários/quota)
     ├── queue.js           # fila persistente em JSON
     ├── queueRunner.js     # executor com barra de progresso
     ├── subscriptions.js   # inscrições (playlists/canais)
     ├── sync.js            # sync incremental
+    ├── scheduler.js       # loop de sync periódico
     ├── lyrics.js          # .lrc via lyrics.ovh
     ├── export.js          # .m3u + README.md
     ├── stats.js           # dashboard ASCII
     ├── updater.js         # self-update
     ├── completions.js     # bash/zsh/fish
-    └── ui.js              # splash + settingsMenu (PT, seções)
+    ├── ui.js              # splash + settingsMenu (PT, seções)
+    ├── spotify.js         # ✨ resolver Spotify/Deezer/Apple (v2.4)
+    ├── player.js          # ✨ terminal music player (v2.4)
+    ├── organizer.js       # ✨ smart library organizer (v2.4)
+    ├── profiles.js        # ✨ config profiles (v2.4)
+    ├── pushNotify.js      # ✨ push notifications Telegram (v2.4)
+    └── webServer.js       # ✨ web dashboard + REST API (v2.4)
 ```
 
 ---
