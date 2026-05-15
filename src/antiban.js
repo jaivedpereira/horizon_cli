@@ -47,7 +47,7 @@ export const ANTIBAN_MODES = {
     },
     seguro: {
         label: 'Seguro — recomendado (padrão)',
-        sleep: 2,
+        sleep: 1,
         rate: null,
         clients: ['android', 'web'],
     },
@@ -169,9 +169,9 @@ export function antibanFlags(settings = {}) {
     const mode = ANTIBAN_MODES[modeKey] || ANTIBAN_MODES.seguro;
     const flags = [];
 
-    // 1. Sleep entre requests (faz o tráfego parecer humano).
+    // 1. Sleep entre VÍDEOS (não entre cada request HTTP — isso era muito lento).
+    // --sleep-requests é REMOVIDO pois deixava cada vídeo N vezes mais lento.
     if (mode.sleep > 0) {
-        flags.push(`--sleep-requests ${mode.sleep}`);
         flags.push(`--sleep-interval ${mode.sleep}`);
         flags.push(`--max-sleep-interval ${mode.sleep * 2}`);
     }
