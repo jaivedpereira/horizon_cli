@@ -1,5 +1,124 @@
 # Changelog
 
+## [2.4.0] — 2026-05-15 — "Comando Central"
+
+### 🌐 Web Dashboard
+
+Dashboard completo acessível pelo navegador em `http://servidor:3777`.
+
+- **Interface dark-mode** profissional, responsiva, single-file (sem build/webpack).
+- **REST API** com 14 endpoints para controlar tudo remotamente.
+- **Autenticação** via Bearer token (`WEB_TOKEN` no `.env`).
+- **Busca + download** direto do browser (YouTube, Spotify, Deezer).
+- **Cards em tempo real**: downloads, fila, playlists, estado anti-ban.
+- **Histórico visual** com tabela e status (ok/erro).
+- **Ações rápidas**: sync, rodar fila, retry, resetar anti-ban.
+- **Auto-refresh** a cada 30 segundos.
+- Zero dependências externas (usa `http` nativo do Node — sem Express!).
+
+Rodar: `horizon web` ou `npm run web`.
+
+---
+
+### 🟢 Spotify / Deezer / Apple Music — Resolver nativo
+
+Agora você cola o link e o Horizon resolve sozinho — sem precisar de
+TuneMyMusic ou qualquer site externo.
+
+- **Não precisa de API key** do Spotify — usa oEmbed público.
+- **Track**: extrai "Artista - Título" → busca no YouTube → baixa.
+- **Playlist / Album**: extrai lista de faixas do embed page do Spotify
+  → baixa tudo em lote com concorrência.
+- **Suporta** Spotify, Deezer e Apple Music (link → nome → YouTube).
+- **Preview**: `horizon spotify <url> --preview` mostra faixas sem baixar.
+- Também funciona no bot do Telegram e no Web Dashboard.
+
+---
+
+### 🎵 Player de terminal
+
+Toca músicas direto no SSH / Termux sem sair do terminal.
+
+- **Usa mpv** (preferido), ffplay ou sox — o que estiver instalado.
+- **Controles**: Enter = próxima, q = parar, s = re-shuffle.
+- **Modos**: `--shuffle` (aleatório), `--loop` (repetir).
+- **Now Playing** bonito com artista/título parseados do nome.
+- **`--list`** mostra pastas tocáveis.
+- Funciona em SSH (se o servidor tiver saída de áudio) ou localmente.
+
+---
+
+### 🗂️ Smart Organizer
+
+Reorganiza sua biblioteca automaticamente por artista.
+
+- **Modo `artist`**: agrupa arquivos em subpastas `Artista/arquivo.mp3`.
+- **Modo `flat`**: desfaz a organização (volta tudo pra raiz).
+- **Preview por padrão** — mostra o plano sem mexer em nada.
+- **`--execute`** pra mover de verdade (pede confirmação).
+- Remove pastas vazias que ficarem.
+
+---
+
+### 🎚️ Perfis de configuração
+
+Salva conjuntos nomeados de configs e alterna entre eles.
+
+- **`horizon profiles save meu-perfil`** — salva tudo (formato, anti-ban, pasta...).
+- **`horizon profiles load meu-perfil`** — carrega e aplica.
+- **`horizon profiles list`** / **`delete`**.
+- Perfis ficam em `~/.horizon/profiles/<nome>.json`.
+- Exemplos de uso: "servidor" (anti-ban agressivo), "qualidade" (flac 320k).
+
+---
+
+### 🔔 Push Notifications (Telegram)
+
+Admin recebe ping no Telegram quando eventos importantes acontecem.
+
+- Circuit breaker abriu (ban detectado).
+- Lote grande concluído.
+- Sync encontrou faixas novas.
+- Primeiro usuário novo no bot.
+- Erros críticos.
+- **`horizon notify "sua mensagem"`** — envia push manual pros admins.
+- Requer `BOT_TOKEN` + `ADMIN_USER_IDS` no `.env`.
+
+---
+
+### 🆕 Novos comandos
+
+| Comando | O que faz |
+|---|---|
+| `horizon spotify <url>` | Resolve e baixa de Spotify/Deezer/Apple |
+| `horizon spotify <url> --preview` | Mostra faixas sem baixar |
+| `horizon play [pasta]` | Toca no terminal |
+| `horizon play --list` | Lista pastas tocáveis |
+| `horizon play --shuffle --loop` | Shuffle + repetir |
+| `horizon organize [pasta]` | Mostra plano de reorganização |
+| `horizon organize [pasta] --execute` | Executa a reorganização |
+| `horizon profiles list` | Lista perfis salvos |
+| `horizon profiles save <nome>` | Salva config atual como perfil |
+| `horizon profiles load <nome>` | Carrega perfil |
+| `horizon profiles delete <nome>` | Deleta perfil |
+| `horizon web [--port 3777]` | Inicia o Web Dashboard |
+| `horizon notify <msg>` | Push notification pros admins |
+
+### 🔧 Internals
+
+- `src/spotify.js` (novo) — resolver Spotify via oEmbed + embed scraping.
+- `src/player.js` (novo) — wrapper mpv/ffplay/sox com controles.
+- `src/organizer.js` (novo) — reorganizador por artista com preview.
+- `src/profiles.js` (novo) — perfis nomeados de configuração.
+- `src/pushNotify.js` (novo) — push notifications via Telegram Bot API.
+- `src/webServer.js` (novo) — servidor HTTP nativo + dashboard HTML embutido.
+- `index.js` — 6 novos subcomandos + 5 entradas no menu interativo.
+- `package.json` v2.4.0 + script `web`.
+- `.env.example` — variáveis `WEB_TOKEN` e `WEB_PORT`.
+- Zero dependências novas (web server usa `http` nativo!).
+
+---
+
 ## [2.3.0] — 2026-05-12 — "Servidor"
 
 ### 🤖 Bot reescrito como servidor multiusuário

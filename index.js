@@ -74,6 +74,12 @@ import {
 import { rebuildArchive, scanLibrary } from './src/scanner.js';
 import { createBackup, restoreBackup } from './src/backup.js';
 import { runHealthCheck, prettyPrintHealth } from './src/health.js';
+import { resolveAndDownload, previewSpotifyLink, detectPlatform } from './src/spotify.js';
+import { play, listPlayable, detectPlayer } from './src/player.js';
+import { planOrganize, executeOrganize, printPlan } from './src/organizer.js';
+import { listProfiles, saveProfile, loadProfile, deleteProfile, printProfiles } from './src/profiles.js';
+import { notifyCustom, getPushStatus } from './src/pushNotify.js';
+import { startWebServer } from './src/webServer.js';
 
 // ============================================================
 //  AÇÕES DE ALTO NÍVEL
@@ -619,6 +625,11 @@ async function mainMenu() {
                 { name: '💾  Backup / Restaurar', value: 'backup' },
                 { name: '🎤  Baixar letras (.lrc) de uma pasta', value: 'lyrics' },
                 { name: '📤  Exportar .m3u + README de uma pasta', value: 'export' },
+                { name: '🟢  Spotify / Deezer (colar link)', value: 'spotify' },
+                { name: '🎵  Player (tocar no terminal)', value: 'player' },
+                { name: '🗂️   Organizar biblioteca por artista', value: 'organize' },
+                { name: '🎚️   Perfis de configuração', value: 'profiles' },
+                { name: '🌐  Web Dashboard', value: 'web' },
                 { name: '📝  Ver logs', value: 'logs' },
                 { name: '🔄  Atualizar yt-dlp / Horizon', value: 'update' },
                 { name: '❌  Sair', value: 'exit' },
@@ -817,6 +828,108 @@ async function mainMenu() {
             if (what !== 'back') doUpdate({ [what]: true });
             break;
         }
+        case 'spotify': {
+            const { url } = await inquirer.prompt([
+                { type: 'input', name: 'url', message: 'Cole o link do Spotify / Deezer / Apple Music:' },
+            ]);
+            if (!url) break;
+            const info = detectPlatform(url);
+            if (!info) {
+                console.log(chalk.red('❌ Link não reconhecido.'));
+                break;
+            }
+            const spinner = createSpinner(`Resolvendo ${info.platform}...`).start();
+            const res = await resolveAndDownload(url);
+            spinner.stop();
+            if (res.ok) {
+                console.log(chalk.green(`✅ ${res.downloaded || 1} de ${res.tracks || 1} faixas baixadas!`));
+            } else {
+                console.log(chalk.red(`❌ ${res.error}`));
+            }
+            break;
+        }
+        case 'player': {
+            const playable = listPlayable();
+            if (!playable.length) { console.log(chalk.yellow('⚠️  Nenhuma pasta com áudio.')); break; }
+            const { folder } = await inquirer.prompt([
+                { type: 'rawlist', name: 'folder', message: 'Qual pasta tocar?', choices: playable.map((p) => `${p.name} (${p.count})`) },
+            ]);
+            const name = folder.replace(/\s*\(\d+\)$/, '');
+            const { shuffle } = await inquirer.prompt([
+                { type: 'confirm', name: 'shuffle', message: 'Modo aleatório?', default: false },
+            ]);
+            await play(name, { shuffle });
+            break;
+        }
+        case 'organize': {
+            const folders = listPlaylistFolders();
+            if (!folders.length) { console.log(chalk.yellow('⚠️  Nenhuma pasta.')); break; }
+            const { folder } = await inquirer.prompt([
+                { type: 'rawlist', name: 'folder', message: 'Pasta pra organizar:', choices: folders },
+            ]);
+            const plan = planOrganize(folder, 'artist');
+            printPlan(plan);
+            if (plan.ok && plan.moves.length) {
+                const { go } = await inquirer.prompt([
+                    { type: 'confirm', name: 'go', message: `Mover ${plan.moves.length} arquivo(s)?`, default: false },
+                ]);
+                if (go) {
+                    const res = executeOrganize(plan);
+                    console.log(chalk.green(`✅ ${res.moved} movidos.`));
+                }
+            }
+            break;
+        }
+        case 'profiles': {
+            const { pAction } = await inquirer.prompt([
+                {
+                    type: 'rawlist',
+                    name: 'pAction',
+                    message: 'Perfis:',
+                    choices: [
+                        { name: 'Listar', value: 'list' },
+                        { name: 'Salvar config atual como perfil', value: 'save' },
+                        { name: 'Carregar perfil', value: 'load' },
+                        { name: 'Deletar perfil', value: 'delete' },
+                        { name: '⬅️  Voltar', value: 'back' },
+                    ],
+                },
+            ]);
+            if (pAction === 'list') printProfiles();
+            else if (pAction === 'save') {
+                const { nome, desc } = await inquirer.prompt([
+                    { type: 'input', name: 'nome', message: 'Nome do perfil:' },
+                    { type: 'input', name: 'desc', message: 'Descrição (opcional):' },
+                ]);
+                if (nome) {
+                    const r = saveProfile(nome, desc);
+                    console.log(r.ok ? chalk.green(`✅ Salvo: ${r.name}`) : chalk.red(`❌ ${r.error}`));
+                }
+            } else if (pAction === 'load') {
+                const profiles = listProfiles();
+                if (!profiles.length) { console.log(chalk.yellow('Nenhum perfil.')); break; }
+                const { nome } = await inquirer.prompt([
+                    { type: 'rawlist', name: 'nome', message: 'Qual perfil?', choices: profiles.map((p) => p.name) },
+                ]);
+                const r = loadProfile(nome);
+                console.log(r.ok ? chalk.green(`✅ Carregado: ${r.name}`) : chalk.red(`❌ ${r.error}`));
+            } else if (pAction === 'delete') {
+                const profiles = listProfiles();
+                if (!profiles.length) { console.log(chalk.yellow('Nenhum perfil.')); break; }
+                const { nome } = await inquirer.prompt([
+                    { type: 'rawlist', name: 'nome', message: 'Qual perfil deletar?', choices: profiles.map((p) => p.name) },
+                ]);
+                const r = deleteProfile(nome);
+                console.log(r.ok ? chalk.green('✅ Deletado.') : chalk.red(`❌ ${r.error}`));
+            }
+            break;
+        }
+        case 'web': {
+            console.log(chalk.cyanBright('\n🌐 Iniciando Web Dashboard...\n'));
+            startWebServer({ port: 3777 });
+            // Não faz break — servidor roda até Ctrl+C.
+            return;
+        }
         case 'exit':
             console.log(chalk.green('\n👋  Até a próxima.\n'));
             process.exit(0);
@@ -834,7 +947,7 @@ const program = new Command();
 program
     .name('horizon')
     .description('Horizon CLI — ecossistema musical no terminal')
-    .version('2.3.0');
+    .version('2.4.0');
 
 program
     .command('search <termo...>')
@@ -1066,6 +1179,145 @@ program
             }
         }
         console.log(chalk.green(`✅ Cache do bot limpo: ${removed} arquivos removidos.`));
+        process.exit(0);
+    });
+
+// Novos v2.4:
+program
+    .command('spotify <url>')
+    .description('Resolver e baixar de link Spotify/Deezer/Apple Music')
+    .option('-p, --playlist <nome>', 'pasta de destino')
+    .option('--preview', 'mostra as faixas que seriam baixadas sem baixar')
+    .action(async (url, opts) => {
+        requireDependencies();
+        if (opts.preview) {
+            const spinner = createSpinner('Extraindo faixas do Spotify...').start();
+            const res = await previewSpotifyLink(url);
+            spinner.stop();
+            if (!res.ok) { console.log(chalk.red(`❌ ${res.error}`)); process.exit(1); }
+            console.log(chalk.blueBright(`\n🟢 ${res.platform} (${res.type}) — ${res.tracks.length} faixas:\n`));
+            res.tracks.forEach((t, i) => console.log(chalk.white(`  ${i + 1}. ${t}`)));
+            console.log('');
+            process.exit(0);
+        }
+        const spinner = createSpinner('Resolvendo Spotify e baixando...').start();
+        const res = await resolveAndDownload(url, { playlist: opts.playlist });
+        spinner.stop();
+        if (res.ok) {
+            console.log(chalk.green(`\n✅ Spotify: ${res.downloaded || 1} de ${res.tracks || 1} faixas baixadas.`));
+        } else {
+            console.log(chalk.red(`❌ ${res.error}`));
+        }
+        process.exit(res.ok ? 0 : 1);
+    });
+
+program
+    .command('play [pasta]')
+    .description('Tocar músicas no terminal (usa mpv/ffplay)')
+    .option('-s, --shuffle', 'modo aleatório')
+    .option('-l, --loop', 'repetir ao chegar no fim')
+    .option('--list', 'listar pastas tocáveis')
+    .action(async (pasta, opts) => {
+        if (opts.list) {
+            const playable = listPlayable();
+            if (!playable.length) { console.log(chalk.yellow('⚠️  Nenhuma pasta com áudio.')); process.exit(0); }
+            console.log(chalk.blueBright(`\n🎵 Pastas disponíveis:\n`));
+            playable.forEach((p) => console.log(`  ${chalk.cyanBright(p.name)}  ${chalk.gray(`(${p.count} faixas)`)}`));
+            console.log('');
+            process.exit(0);
+        }
+        if (!pasta) {
+            const playable = listPlayable();
+            if (!playable.length) { console.log(chalk.yellow('⚠️  Nenhuma pasta com áudio.')); process.exit(0); }
+            const { folder } = await inquirer.prompt([
+                { type: 'rawlist', name: 'folder', message: 'Qual pasta tocar?', choices: playable.map((p) => p.name) },
+            ]);
+            pasta = folder;
+        }
+        await play(pasta, { shuffle: opts.shuffle, loop: opts.loop });
+        process.exit(0);
+    });
+
+program
+    .command('organize [pasta]')
+    .description('Reorganizar biblioteca por artista (parse do nome do arquivo)')
+    .option('-m, --mode <mode>', 'artist (padrão) ou flat', 'artist')
+    .option('--execute', 'executar de verdade (sem isso, só mostra o plano)')
+    .action(async (pasta, opts) => {
+        if (!pasta) {
+            const folders = listPlaylistFolders();
+            if (!folders.length) { console.log(chalk.yellow('⚠️  Nenhuma pasta.')); process.exit(0); }
+            const { folder } = await inquirer.prompt([
+                { type: 'rawlist', name: 'folder', message: 'Pasta pra organizar:', choices: folders },
+            ]);
+            pasta = folder;
+        }
+        const plan = planOrganize(pasta, opts.mode);
+        printPlan(plan);
+        if (!plan.ok || !plan.moves.length) { process.exit(0); }
+        if (!opts.execute) {
+            console.log(chalk.yellow('⚠️  Modo preview. Adicione --execute pra mover de verdade.\n'));
+            process.exit(0);
+        }
+        const { confirm } = await inquirer.prompt([
+            { type: 'confirm', name: 'confirm', message: `Mover ${plan.moves.length} arquivo(s)?`, default: false },
+        ]);
+        if (!confirm) { process.exit(0); }
+        const spinner = createSpinner('Reorganizando...').start();
+        const res = executeOrganize(plan, ({ index, total }) => {
+            spinner.update({ text: `[${index + 1}/${total}]` });
+        });
+        spinner.success({ text: `Movidos ${res.moved}/${res.total}${res.errors.length ? ` (${res.errors.length} erros)` : ''}` });
+        process.exit(0);
+    });
+
+const profilesCmd = program.command('profiles').description('Gerenciar perfis de configuração');
+profilesCmd.command('list').description('Listar perfis salvos')
+    .action(() => { printProfiles(); process.exit(0); });
+profilesCmd.command('save <nome>').description('Salvar config atual como perfil')
+    .option('-d, --desc <texto>', 'descrição')
+    .action((nome, opts) => {
+        const res = saveProfile(nome, opts.desc || '');
+        if (res.ok) console.log(chalk.green(`✅ Perfil "${res.name}" salvo.`));
+        else console.log(chalk.red(`❌ ${res.error}`));
+        process.exit(0);
+    });
+profilesCmd.command('load <nome>').description('Carregar perfil como config ativa')
+    .action((nome) => {
+        const res = loadProfile(nome);
+        if (res.ok) console.log(chalk.green(`✅ Perfil "${res.name}" carregado.`));
+        else console.log(chalk.red(`❌ ${res.error}`));
+        process.exit(0);
+    });
+profilesCmd.command('delete <nome>').description('Deletar perfil')
+    .action((nome) => {
+        const res = deleteProfile(nome);
+        if (res.ok) console.log(chalk.green(`✅ Deletado.`));
+        else console.log(chalk.red(`❌ ${res.error}`));
+        process.exit(0);
+    });
+
+program
+    .command('web')
+    .description('Iniciar o Web Dashboard (REST API + UI)')
+    .option('--port <n>', 'porta (padrão 3777)', (v) => parseInt(v, 10))
+    .action((opts) => {
+        startWebServer({ port: opts.port || 3777 });
+        // Não faz process.exit — servidor fica rodando.
+    });
+
+program
+    .command('notify <mensagem...>')
+    .description('Enviar notificação push para os admins via Telegram')
+    .action(async (partes) => {
+        const msg = partes.join(' ');
+        const status = getPushStatus();
+        if (!status.enabled) {
+            console.log(chalk.red('❌ Push desabilitado. Defina BOT_TOKEN e ADMIN_USER_IDS no .env.'));
+            process.exit(1);
+        }
+        await notifyCustom(`📢 *Manual:* ${msg}`);
+        console.log(chalk.green(`✅ Notificação enviada para ${status.adminCount} admin(s).`));
         process.exit(0);
     });
 

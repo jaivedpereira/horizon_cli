@@ -1,7 +1,7 @@
 {
   "name": "horizon-cli",
-  "version": "2.3.0",
-  "description": "Seu ecossistema musical direto do terminal. Busca, baixa, organiza e envia músicas via CLI ou bot do Telegram. Compatível com Android (Termux), Linux, macOS e Windows.",
+  "version": "2.4.0",
+  "description": "Seu ecossistema musical direto do terminal. Busca, baixa, organiza e envia músicas via CLI ou bot do Telegram. Web Dashboard, Spotify resolver, player terminal, anti-ban. Compatível com Android (Termux), Linux, macOS e Windows.",
   "type": "module",
   "main": "index.js",
   "bin": {
@@ -15,6 +15,7 @@
   "scripts": {
     "start": "node index.js",
     "bot": "node bot.js",
+    "web": "node index.js web",
     "schedule": "node index.js schedule",
     "doctor": "node index.js doctor",
     "health": "node index.js health",
@@ -36,7 +37,10 @@
     "android",
     "telegram-bot",
     "playlist",
-    "downloader"
+    "downloader",
+    "spotify",
+    "web-dashboard",
+    "player"
   ],
   "author": "Horizon User",
   "license": "MIT",
