@@ -4,6 +4,7 @@
  */
 
 import { execSync } from 'child_process';
+import fs from 'fs';
 import chalk from 'chalk';
 
 function hasBinary(cmd) {
@@ -55,6 +56,18 @@ export function checkDependencies({ silent = false } = {}) {
             } else {
                 console.log(chalk.red(`  ✗ ${r.name} não encontrado`));
                 console.log(chalk.gray(`    Instalar: ${r.hint}`));
+            }
+        }
+
+        // Verifica permissão de storage no Termux.
+        if (process.env.TERMUX_VERSION) {
+            const storageOk = fs.existsSync('/sdcard/Music') || fs.existsSync('/storage/emulated/0/Music');
+            if (storageOk) {
+                console.log(chalk.green(`  ✓ Permissão de armazenamento`));
+            } else {
+                console.log(chalk.red(`  ✗ Permissão de armazenamento não detectada`));
+                console.log(chalk.gray(`    Rode: termux-setup-storage`));
+                console.log(chalk.gray(`    E aceite a permissão no popup que aparecer.`));
             }
         }
     }
