@@ -110,11 +110,16 @@ export function buildYtdlpCommand({
         '--buffer-size', '16K',
     ];
 
-    // Thumbnail: --embed-thumbnail pode falhar por permissão no Android.
-    // Usamos --write-thumbnail=false pra não salvar .webp no disco (que dá "Operation not permitted").
+    // Thumbnail: No Android/Termux o filesystem do /sdcard NÃO permite criar .webp temporários.
+    // O --embed-thumbnail precisa salvar um .webp antes de embutir no mp3, e isso FALHA com
+    // "Operation not permitted" em SAF/sdcardfs. Solução: usar --paths temp: pra forçar o
+    // temporário pra uma pasta com permissão total (o home do Termux ou /tmp).
     if (embedThumbnail) {
         args.push('--embed-thumbnail');
-        args.push('--no-write-thumbnail');  // NÃO salva o .webp separado (resolv problema de permissão Android)
+        args.push('--no-write-thumbnail');
+        // Força temporários pra pasta com permissão (resolve "Operation not permitted" de vez).
+        const tempDir = process.env.TERMUX_VERSION ? process.env.HOME || '/data/data/com.termux/files/home' : '/tmp';
+        args.push('--paths', `temp:${shellEscape(tempDir)}`);
     }
     if (embedMetadata) args.push('--add-metadata');
     if (dedup) args.push('--download-archive', shellEscape(getArchiveFile()));
@@ -125,15 +130,31 @@ export function buildYtdlpCommand({
     // Normalização de volume (EBU R128).
     args.push(...loudnessFlags(settings));
 
-    // Restringe caracteres do nome do arquivo pra filesystem (resolve "Operation not permitted").
+    // Restringe caracteres do nome do arquivo pra filesystem Android (chars ilegais → _).
     args.push('--restrict-filenames');
 
     args.push('-o', outputTemplate);
     return args.join(' ');
 }
 
-/** Hook pós-download: lyrics + export M3U (se habilitados). */
+/** Hook pós-download: lyrics + export M3U + fix permissions. */
 async function postProcess({ dir, settings }) {
+    // Fix permissões: garante que os arquivos são legíveis por qualquer app (player de música, galeria).
+    // No Termux os arquivos às vezes ficam com permissão restrita (600). Mudamos pra 644.
+    try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+            const full = path.join(dir, f);
+            try {
+                fs.chmodSync(full, 0o644);
+            } catch {
+                // Ignore: alguns filesystems (FAT32/sdcardfs) não suportam chmod.
+            }
+        }
+    } catch {
+        // Ignore silenciosamente.
+    }
+
     if (settings.autoExportM3U) {
         try {
             const { exportAll } = await import('./export.js');
