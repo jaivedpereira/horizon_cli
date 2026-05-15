@@ -89,8 +89,9 @@ export function buildYtdlpCommand({
         ? shellEscape(`ytsearch1:${target}`)
         : shellEscape(target);
 
+    // Template de saída: sanitiza caracteres perigosos do título no Android.
     const outputTemplate = shellEscape(
-        path.join(outDir, '%(title)s [%(id)s].%(ext)s'),
+        path.join(outDir, '%(title).100B [%(id)s].%(ext)s'),
     );
 
     const args = [
@@ -101,9 +102,20 @@ export function buildYtdlpCommand({
         `--audio-quality ${quality}K`,
         '--no-warnings',
         '--ignore-errors',
+        '--ignore-no-formats-error',
         playlist ? '--yes-playlist' : '--no-playlist',
+        // Velocidade: fragmentos em paralelo (mais rápido sem aumentar risco de ban).
+        '--concurrent-fragments', '4',
+        // Buffer de rede otimizado.
+        '--buffer-size', '16K',
     ];
-    if (embedThumbnail) args.push('--embed-thumbnail');
+
+    // Thumbnail: --embed-thumbnail pode falhar por permissão no Android.
+    // Usamos --write-thumbnail=false pra não salvar .webp no disco (que dá "Operation not permitted").
+    if (embedThumbnail) {
+        args.push('--embed-thumbnail');
+        args.push('--no-write-thumbnail');  // NÃO salva o .webp separado (resolv problema de permissão Android)
+    }
     if (embedMetadata) args.push('--add-metadata');
     if (dedup) args.push('--download-archive', shellEscape(getArchiveFile()));
 
@@ -112,6 +124,9 @@ export function buildYtdlpCommand({
 
     // Normalização de volume (EBU R128).
     args.push(...loudnessFlags(settings));
+
+    // Restringe caracteres do nome do arquivo pra filesystem (resolve "Operation not permitted").
+    args.push('--restrict-filenames');
 
     args.push('-o', outputTemplate);
     return args.join(' ');
