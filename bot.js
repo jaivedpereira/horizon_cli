@@ -1,5 +1,5 @@
 /**
- * HORIZON BOT — v2.5 "Universal"
+ * HORIZON BOT — v2.5.1 "Universal Fixed"
  *
  * Bot Telegram multiusuario com suporte a TODAS as plataformas:
  *   YouTube, Spotify, Deezer, SoundCloud, Apple Music, Tidal
@@ -12,6 +12,12 @@
  *  ✓ /playlist — baixar playlist inteira de qualquer plataforma
  *  ✓ Deteccao automatica de plataforma em mensagens de texto
  *  ✓ Tudo da v2.3 (quota, admins, cache efemero, circuit breaker)
+ *
+ * v2.5.1 fixes:
+ *  - Removido require() ilegal em ESM (admin_reset)
+ *  - Race condition de conv.busy resolvida com travamento centralizado
+ *  - playlist max passado corretamente ao resolver universal
+ *  - Mensagens de erro mais explicitas para o usuario final
  */
 
 import { Telegraf, Markup } from 'telegraf';
@@ -24,12 +30,13 @@ import { isYoutubeUrl, isPlaylistUrl, formatDuration } from './src/utils.js';
 import { searchYoutube, downloadOne, downloadPlaylist, ensurePlaylistDir } from './src/downloader.js';
 import { requireDependencies } from './src/deps.js';
 import { summary } from './src/history.js';
-import { circuitOpen } from './src/antiban.js';
+import { circuitOpen, resetCircuit } from './src/antiban.js';
 import { updateYtDlp } from './src/updater.js';
 import { log } from './src/logger.js';
 import { getUser, incrementDownload, setBlocked, listAllUsers, syncAdmins, globalStats, userCount } from './src/botState.js';
 import { universalResolve, detectSource, supportedPlatforms } from './src/playlistResolver.js';
-import { addFavorite, listFavorites, removeFavorite, favoritesCount } from './src/favorites.js';
+import { addFavorite, listFavorites, removeFavorite, favoritesCount, exportFavoritesAsTerms } from './src/favorites.js';
+import { downloadBatch } from './src/downloader.js';
 
 dotenv.config();
 
@@ -87,7 +94,8 @@ function releaseSlot() {
 function isAdmin(ctx) { return ADMINS.includes(String(ctx.from?.id)); }
 
 function userCacheDir(userId) {
-    const dir = path.join(CACHE_DIR, String(userId));
+    // Mesmo path que o downloader vai usar (com sanitizeName).
+    const dir = path.join(CACHE_DIR, sanitizeName(String(userId)));
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return dir;
 }
@@ -375,7 +383,6 @@ bot.command('admin_broadcast', async (ctx) => {
 
 bot.command('admin_reset', (ctx) => {
     if (!isAdmin(ctx)) return;
-    const { resetCircuit } = require('./src/antiban.js');
     resetCircuit();
     return ctx.reply('🛡️ Circuit breaker resetado.');
 });
@@ -418,91 +425,85 @@ async function handleUniversalDownload(ctx, url, expectedPlatform) {
         return ctx.reply(`⚠️ Esperava link do ${expectedPlatform}, mas recebi ${source.platform}.`);
     }
 
-    const cacheDir = userCacheDir(userId);
-    const overrides = { musicBaseDir: path.dirname(cacheDir) };
-    const conv = getConvState(userId);
-    conv.busy = true;
+    // Pasta efemera: musicBaseDir aponta pra parent, e a "playlist" e o sanitize do userId.
+    // O downloader usa sanitizeName, entao recriamos o mesmo caminho aqui pra ler depois.
+    const playlistName = String(userId);
+    const sanitized = sanitizeName(playlistName);
+    const baseDir = path.join(getAppDir(), 'bot-cache');
+    const cacheDir = path.join(baseDir, sanitized);
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+    const overrides = { musicBaseDir: baseDir };
 
     const statusMsg = await ctx.reply(`🚀 Resolvendo ${source.platform} (${source.type})...`);
 
     await acquireSlot();
     try {
         const res = await universalResolve(url, {
-            playlist: String(userId),
+            playlist: playlistName,
             overrides,
             silent: true,
+            maxTracks: PLAYLIST_MAX,
         });
 
         if (!res.ok) {
-            return safeEdit(ctx, statusMsg, `❌ Erro: ${res.error || 'falha no download'}`);
+            const errMsg = res.error
+                ? `❌ ${res.error}`
+                : '❌ Falha no download. Tente outro link ou aguarde alguns minutos.';
+            await safeEdit(ctx, statusMsg, errMsg.slice(0, 350));
+            return;
         }
 
-        // Envia arquivos do cache
-        const files = fs.readdirSync(cacheDir)
-            .filter((f) => /\.(mp3|m4a|opus|flac)$/i.test(f))
-            .map((name) => {
-                const full = path.join(cacheDir, name);
-                const stat = fs.statSync(full);
-                return { name, full, sizeMB: stat.size / 1024 / 1024 };
-            })
-            .filter((f) => f.sizeMB <= MAX_FILE_MB_TELEGRAM);
+        // Lista arquivos baixados na pasta efemera.
+        const files = listAudioFilesIn(cacheDir);
+        const sendable = files.filter((f) => f.sizeMB <= MAX_FILE_MB_TELEGRAM);
+        const tooBig = files.filter((f) => f.sizeMB > MAX_FILE_MB_TELEGRAM);
 
         if (!files.length) {
-            return safeEdit(ctx, statusMsg, '⚠️ Download ok mas arquivo muito grande ou nao encontrado.');
+            await safeEdit(ctx, statusMsg, '⚠️ Download concluido mas nenhum arquivo de audio encontrado. O resolver pode ter falhado em encontrar a faixa no YouTube.');
+            return;
         }
 
-        await safeEdit(ctx, statusMsg, `📤 Enviando ${files.length} arquivo(s)...`);
+        if (!sendable.length) {
+            await safeEdit(ctx, statusMsg, `⚠️ Arquivo(s) muito grande(s) para o Telegram (max ${MAX_FILE_MB_TELEGRAM}MB). Use qualidade menor com /quality 128.`);
+            return;
+        }
+
+        await safeEdit(ctx, statusMsg, `📤 Enviando ${sendable.length} arquivo(s)...`);
         let sent = 0;
-        for (const f of files) {
+        for (const f of sendable) {
             try {
                 await ctx.replyWithAudio({ source: f.full, filename: f.name });
                 incrementDownload(userId);
                 sent++;
-                if (files.length > 1) await new Promise((r) => setTimeout(r, 400));
-            } catch (err) { log.warn(`bot: send fail ${f.name}: ${err.message}`); }
+                if (sendable.length > 1) await new Promise((r) => setTimeout(r, 400));
+            } catch (err) {
+                log.warn(`bot: send fail ${f.name}: ${err.message}`);
+            }
         }
-        await safeEdit(ctx, statusMsg, `✅ Pronto! ${sent} arquivo(s) enviado(s).`);
+
+        const finalLines = [`✅ Pronto! ${sent}/${files.length} enviado(s).`];
+        if (tooBig.length) finalLines.push(`⚠️ ${tooBig.length} ignorado(s) por tamanho.`);
+        await safeEdit(ctx, statusMsg, finalLines.join('\n'));
     } catch (err) {
         log.error(`bot: universal dl fail: ${err.message}`);
         await safeEdit(ctx, statusMsg, `❌ Erro: ${String(err.message).slice(0, 200)}`);
     } finally {
         cleanUserCache(userId);
         releaseSlot();
-        conv.busy = false;
     }
 }
 
-async function performSingleDownload(ctx, statusMsg, target) {
-    const userId = ctx.from.id;
-    const cacheDir = userCacheDir(userId);
-    const overrides = { musicBaseDir: path.dirname(cacheDir) };
-
-    await safeEdit(ctx, statusMsg, '⏳ Baixando...');
-    await acquireSlot();
-    try {
-        const res = await downloadOne({ target, playlist: String(userId), isSearchTerm: !isYoutubeUrl(target), overrides });
-        if (!res.ok) return safeEdit(ctx, statusMsg, '❌ Erro no download.');
-
-        const files = fs.readdirSync(cacheDir)
-            .filter((f) => /\.(mp3|m4a|opus|flac)$/i.test(f))
-            .map((name) => ({ name, full: path.join(cacheDir, name), sizeMB: fs.statSync(path.join(cacheDir, name)).size / 1024 / 1024 }))
-            .sort((a, b) => fs.statSync(b.full).mtimeMs - fs.statSync(a.full).mtimeMs);
-
-        const latest = files[0];
-        if (!latest) return safeEdit(ctx, statusMsg, '⚠️ Arquivo nao encontrado.');
-        if (latest.sizeMB > MAX_FILE_MB_TELEGRAM) { cleanUserCache(userId); return safeEdit(ctx, statusMsg, `⚠️ Muito grande (${latest.sizeMB.toFixed(1)}MB).`); }
-
-        await safeEdit(ctx, statusMsg, '📤 Enviando...');
-        await ctx.replyWithAudio({ source: latest.full, filename: latest.name });
-        await safeEdit(ctx, statusMsg, `✅ ${latest.name}`);
-        incrementDownload(userId);
-    } catch (err) {
-        log.error(`bot: dl fail: ${err.message}`);
-        await safeEdit(ctx, statusMsg, `❌ ${String(err.message).slice(0, 200)}`);
-    } finally {
-        cleanUserCache(userId);
-        releaseSlot();
-    }
+/** Lista arquivos de audio em uma pasta com tamanho em MB. */
+function listAudioFilesIn(dir) {
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+        .filter((f) => /\.(mp3|m4a|opus|flac)$/i.test(f))
+        .map((name) => {
+            const full = path.join(dir, name);
+            const stat = fs.statSync(full);
+            return { name, full, sizeMB: stat.size / 1024 / 1024, mtime: stat.mtimeMs };
+        })
+        .sort((a, b) => b.mtime - a.mtime);
 }
 
 
@@ -557,7 +558,7 @@ bot.on('text', async (ctx) => {
                 await handleUniversalDownload(ctx, text, null);
             }
         } else if (isYoutubeUrl(text)) {
-            // YouTube direto
+            // YouTube direto — usa resolver universal (que delega pra downloader.js)
             if (isPlaylistUrl(text)) {
                 const buttons = Markup.inlineKeyboard([
                     [Markup.button.callback(`✅ Baixar playlist (max ${PLAYLIST_MAX})`, 'upl_yes')],
@@ -567,8 +568,7 @@ bot.on('text', async (ctx) => {
                 conv.pendingKind = 'universal_playlist';
                 await ctx.reply('📦 Playlist do YouTube detectada. Baixar?', { ...buttons });
             } else {
-                const status = await ctx.reply('🚀 Baixando...');
-                await performSingleDownload(ctx, status, text);
+                await handleUniversalDownload(ctx, text, null);
             }
         } else {
             // Termo de busca
@@ -595,55 +595,71 @@ bot.action(/^dl_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch {}
     const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const status = await ctx.reply('🚀 Baixando...');
     const conv = getConvState(ctx.from.id);
+    if (conv.busy) return ctx.reply('⏳ Ja estou processando outro pedido.');
     conv.busy = true;
-    try { await performSingleDownload(ctx, status, url); } finally { conv.busy = false; }
+    try {
+        await handleUniversalDownload(ctx, url, null);
+    } finally {
+        conv.busy = false;
+    }
 });
 
 bot.action('upl_yes', async (ctx) => {
     const conv = getConvState(ctx.from.id);
     const url = conv.pendingUrl;
-    if (!url) return ctx.answerCbQuery('Expirado.');
+    if (!url) return ctx.answerCbQuery('Pedido expirado.');
+    if (conv.busy) return ctx.answerCbQuery('Ja estou processando!');
     await ctx.answerCbQuery();
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch {}
     conv.pendingUrl = null;
     conv.pendingKind = null;
-    await handleUniversalDownload(ctx, url, null);
+    conv.busy = true;
+    try {
+        await handleUniversalDownload(ctx, url, null);
+    } finally {
+        conv.busy = false;
+    }
 });
 
 bot.action('fav_dl_yes', async (ctx) => {
     const conv = getConvState(ctx.from.id);
+    if (conv.busy) return ctx.answerCbQuery('Ja estou processando!');
     await ctx.answerCbQuery();
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch {}
 
-    const { exportFavoritesAsTerms } = await import('./src/favorites.js');
     const terms = exportFavoritesAsTerms();
     if (!terms.length) return ctx.reply('⭐ Nenhum favorito.');
 
-    const statusMsg = await ctx.reply(`⏳ Baixando ${terms.length} favoritos...`);
     const userId = ctx.from.id;
-    const cacheDir = userCacheDir(userId);
-    const overrides = { musicBaseDir: path.dirname(cacheDir) };
+    const playlistName = String(userId);
+    const sanitized = sanitizeName(playlistName);
+    const baseDir = path.join(getAppDir(), 'bot-cache');
+    const cacheDir = path.join(baseDir, sanitized);
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+    const overrides = { musicBaseDir: baseDir };
 
+    const statusMsg = await ctx.reply(`⏳ Baixando ${terms.length} favoritos...`);
     conv.busy = true;
     await acquireSlot();
     try {
-        const { downloadBatch } = await import('./src/downloader.js');
-        await downloadBatch(terms.slice(0, PLAYLIST_MAX), { playlist: String(userId), overrides });
+        await downloadBatch(terms.slice(0, PLAYLIST_MAX), { playlist: playlistName, overrides });
 
-        const files = fs.readdirSync(cacheDir)
-            .filter((f) => /\.(mp3|m4a|opus|flac)$/i.test(f))
-            .map((name) => ({ name, full: path.join(cacheDir, name), sizeMB: fs.statSync(path.join(cacheDir, name)).size / 1024 / 1024 }))
-            .filter((f) => f.sizeMB <= MAX_FILE_MB_TELEGRAM);
-
+        const files = listAudioFilesIn(cacheDir).filter((f) => f.sizeMB <= MAX_FILE_MB_TELEGRAM);
         let sent = 0;
         for (const f of files) {
-            try { await ctx.replyWithAudio({ source: f.full, filename: f.name }); incrementDownload(userId); sent++; await new Promise((r) => setTimeout(r, 400)); } catch {}
+            try {
+                await ctx.replyWithAudio({ source: f.full, filename: f.name });
+                incrementDownload(userId);
+                sent++;
+                await new Promise((r) => setTimeout(r, 400));
+            } catch (err) {
+                log.warn(`bot: fav send fail ${f.name}: ${err.message}`);
+            }
         }
-        await safeEdit(ctx, statusMsg, `✅ Favoritos: ${sent} enviados.`);
+        await safeEdit(ctx, statusMsg, `✅ Favoritos: ${sent}/${terms.length} enviados.`);
     } catch (err) {
-        await safeEdit(ctx, statusMsg, `❌ Erro: ${err.message}`);
+        await safeEdit(ctx, statusMsg, `❌ Erro: ${String(err.message).slice(0, 200)}`);
     } finally {
         cleanUserCache(userId);
         releaseSlot();
@@ -660,7 +676,7 @@ bot.catch((err, ctx) => {
     console.error('[bot] erro', err);
 });
 
-console.log('🌌 Horizon Bot v2.5 (Universal) iniciando...');
+console.log('🌌 Horizon Bot v2.5.1 (Universal Fixed) iniciando...');
 console.log(`   Users: ${userCount()} | Whitelist: ${ALLOWED.length ? ALLOWED.join(', ') : 'ABERTA'}`);
 console.log(`   Admins: ${ADMINS.length ? ADMINS.join(', ') : 'NENHUM'}`);
 console.log(`   Quota: ${DAILY_QUOTA}/dia | Concorrencia: ${MAX_CONCURRENT_DOWNLOADS}`);
@@ -670,7 +686,7 @@ console.log(`   Plataformas: YouTube, Spotify, Deezer, SoundCloud, Apple Music, 
     if (AUTO_UPDATE_YTDLP) { try { updateYtDlp(); } catch {} }
     await bot.launch();
     console.log('✅ Bot online.');
-    log.info('bot: online v2.5');
+    log.info('bot: online v2.5.1');
 })();
 
 const shutdown = async (sig) => {

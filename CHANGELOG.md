@@ -1,5 +1,82 @@
 # Changelog
 
+## [2.5.1] — 2026-05-16 — "Universal Fixed"
+
+Release de correções importantes em cima da v2.5. Foco em destravar o bot,
+o player do terminal e expandir os caminhos de download universal no CLI.
+
+### 🐛 Bugfixes críticos
+
+- **Bot Telegram voltou a baixar.** A v2.5 referenciava uma função
+  `performSingleDownload` que tinha sido removida na refatoração; o bot
+  derrubava o handler de texto silenciosamente em links normais do YouTube.
+  Agora o router único usa `handleUniversalDownload` para tudo.
+- **`/admin_reset` quebrava o bot.** Usava `require('./src/antiban.js')`
+  num módulo ESM, lançando `ReferenceError: require is not defined`.
+  Migrado para `import` estático.
+- **Cache do bot apontava pra pasta errada.** `userCacheDir` usava o
+  ID bruto enquanto o downloader sanitizava o nome — em IDs negativos
+  (canais Telegram) os arquivos caíam num diretório e o bot lia outro,
+  resultando em "arquivo não encontrado" sem motivo aparente. Agora
+  o caminho é calculado uma única vez via `sanitizeName`.
+- **Player só respondia uma vez aos atalhos.** O listener de `stdin` era
+  registrado dentro de `playFile` e ficava órfão entre faixas — depois
+  da primeira música, `q`, Enter e `s` paravam de funcionar. Reescrevemos
+  o controle de teclado para viver no escopo do `play()` em **raw mode**:
+  os atalhos respondem instantaneamente, sem precisar Enter, e funcionam
+  em todas as faixas seguidas.
+
+### 🎵 Player
+
+- Atalhos novos em raw mode: `n` / Espaço / Enter = próxima, `q` / Esc = parar,
+  `s` = re-shuffle, **`p` = pausa/retoma** (via SIGSTOP/SIGCONT em mpv/ffplay).
+- Cleanup do `setRawMode` é garantido com `try/finally` mesmo em erros.
+- `Ctrl+C` é tratado como "parar" sem deixar o terminal em modo raw.
+
+### 🆕 CLI: download universal e favoritos como comandos
+
+- **`horizon download <url>`** (alias `horizon dl`) — baixa de **qualquer**
+  plataforma suportada (YouTube, Spotify, Deezer, SoundCloud, Apple Music,
+  Tidal). Detecta o tipo automaticamente. Aceita `--preview` e `--playlist`.
+- **`horizon platforms`** — lista visual das plataformas suportadas.
+- **`horizon fav`** (alias `horizon favorites`) — todo o ciclo no CLI:
+  - `horizon fav list [-q termo] [-t tag]`
+  - `horizon fav add "Title" -a "Artist" -u <url>`
+  - `horizon fav remove <id>`
+  - `horizon fav download [-p Pasta]` — baixa **todos** os favoritos em lote.
+  - `horizon fav clear`
+
+### 🟢 Spotify / Deezer / Apple / Tidal / SoundCloud no menu interativo
+
+A entrada do menu virou um submenu mais explícito:
+
+- 🎵 Baixar uma faixa (link)
+- 📦 **Baixar uma playlist / álbum (link)** ← era o pedido
+- 👁️ Preview (mostra faixas sem baixar)
+- 🌐 Ver plataformas suportadas
+
+A pasta de destino é perguntada antes de iniciar (com sugestão `MinhaPlaylist`
+para playlists/álbums), e o resolver universal escolhe o caminho correto
+para cada plataforma.
+
+### ⭐ Favoritos no menu interativo
+
+Nova entrada **"⭐ Favoritos"** no menu principal com:
+- Listar / Adicionar / Remover / Limpar
+- **Baixar TODOS os favoritos** em lote (vai pra pasta `Favoritos` por padrão).
+
+### 🔧 Internals
+
+- `bot.js` agora importa `resetCircuit` estaticamente e centraliza
+  o cálculo da pasta efêmera (`sanitizeName(userId)` + `getAppDir()`).
+- Mensagens de erro do bot ficaram mais informativas: arquivo grande,
+  resolver sem resultado, link inválido, etc.
+- `index.js` v2.5.1 com 3 novos comandos commander e 1 nova entrada
+  no menu interativo.
+- Sintaxe verificada com `node --check` em todos os arquivos modificados.
+
+---
+
 ## [2.5.0] — 2026-05-16 — "Universal"
 
 ### 🌐 Resolver Universal de Plataformas

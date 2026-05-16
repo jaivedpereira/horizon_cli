@@ -1,19 +1,23 @@
 # 🌌 Horizon CLI
 
 > Seu ecossistema musical direto do terminal.
-> Busca, baixa, sincroniza e organiza músicas — com CLI interativa,
-> subcomandos, bot do Telegram, inscrições, fila persistente, letras,
+> Busca, baixa, sincroniza, organiza e **toca** músicas — com CLI
+> interativa, subcomandos, bot do Telegram, **download universal** de
+> 6 plataformas, dashboard web, inscrições, fila persistente, letras,
 > **proteção anti-bloqueio do YouTube** e muito mais.
 
 Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 
-**Versão atual:** `2.4.0` ("Comando Central")
+**Versão atual:** `2.5.1` ("Universal Fixed")
 
 ---
 
 ## 📑 Sumário
 
 - [Destaques](#-destaques)
+- [Plataformas suportadas](#-plataformas-suportadas)
+- [Novidades v2.5.1](#-novidades-da-v251-universal-fixed)
+- [Novidades v2.5](#-novidades-da-v25-universal)
 - [Novidades v2.4](#-novidades-da-v24-comando-central)
 - [Novidades v2.3](#-novidades-da-v23-servidor)
 - [Novidades v2.2](#-novidades-da-v22-anti-ban)
@@ -23,7 +27,7 @@ Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 - [Configurações](#%EF%B8%8F-configurações-em-português-por-seção)
 - [Onde os arquivos ficam](#-onde-os-arquivos-são-salvos)
 - [Bot do Telegram](#-bot-do-telegram)
-- [Spotify / Deezer / Apple Music](#-spotify--deezer--apple-music)
+- [Player de terminal](#-player-de-terminal)
 - [Estrutura do projeto](#%EF%B8%8F-estrutura-do-projeto)
 - [Troubleshooting](#-troubleshooting)
 
@@ -31,13 +35,16 @@ Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 
 ## ✨ Destaques
 
-- 🎵 **Busca + download** do YouTube em mp3/m4a/opus/flac
-- 🟢 **Spotify / Deezer / Apple Music** — cola o link e baixa direto (sem site externo!)
-- 🌐 **Web Dashboard** — controla tudo pelo navegador (dark-mode, REST API)
-- 🎵 **Player de terminal** — toca suas músicas no SSH/Termux com mpv/ffplay
-- 🗂️ **Organizador inteligente** — reorganiza biblioteca por artista automaticamente
+- 🌐 **Download universal** — cola link de YouTube, **Spotify**, Deezer,
+  SoundCloud, Apple Music ou Tidal e o Horizon resolve sozinho
+- ⭐ **Sistema de favoritos** — salva, organiza por tags e baixa em lote
+- 🎵 Busca + download do YouTube em mp3/m4a/opus/flac
+- 🌐 **Web Dashboard** — controla tudo pelo navegador (REST API + UI)
+- 🎵 **Player de terminal** — toca suas músicas no SSH/Termux com mpv/ffplay,
+  agora com pausa/retoma e atalhos em raw mode
+- 🗂️ **Organizador inteligente** — reorganiza biblioteca por artista
 - 🎚️ **Perfis de configuração** — salva presets nomeados e alterna rápido
-- 🔔 **Push Notifications** — recebe ping no Telegram em eventos importantes
+- 🔔 **Push Notifications** no Telegram em eventos importantes
 - 🛡️ **Proteção anti-bloqueio** com 4 perfis + circuit breaker automático
 - 🔔 **Inscrições** (playlists/canais) com auto-sync incremental
 - 📦 **Fila persistente** resistente a crashes, com retries
@@ -46,14 +53,125 @@ Compatível com **Android (Termux)**, **Linux**, **macOS** e **Windows**.
 - 🎤 **Letras (.lrc)** automáticas via lyrics.ovh
 - 📤 **Exportação** de `.m3u` + `README.md` por pasta
 - 📊 **Dashboard ASCII** com gráfico dos últimos dias
-- 🔎 **Scanner** que reconstrói o dedup a partir dos arquivos existentes
-- 💾 **Backup / Restore** completo das configs e estado
+- 🔎 **Scanner** que reconstrói o dedup a partir do disco
+- 💾 **Backup / Restore** completo em JSON
 - 🩺 **Health check** com download de teste
 - 📝 **Logger** com rotação em `~/.horizon/logs`
 - 🔄 **Self-update** de `yt-dlp` e do próprio Horizon
-- 🤖 **Bot do Telegram** multiusuário com quota, admins e auto-cleanup
-- 🖥️  **Auto-complete** para bash, zsh e fish
+- 🤖 **Bot do Telegram** multiusuário com quota, admins, **resolver universal** e auto-cleanup
+- 🖥️ **Auto-complete** para bash, zsh e fish
 - 🇧🇷 **Configurações 100% em português**, organizadas por seção
+
+---
+
+## 🌐 Plataformas suportadas
+
+O resolver universal (v2.5+) baixa direto de:
+
+| Plataforma     | Tipos suportados                  | Como funciona                          |
+| -------------- | --------------------------------- | -------------------------------------- |
+| ▶️ **YouTube** | track / playlist / mix            | nativo via `yt-dlp`                    |
+| 🟢 **Spotify** | track / album / playlist          | oEmbed público + scraping → busca YT  |
+| 🎵 **Deezer**  | track / album / playlist          | metadados + busca YT                   |
+| 🟠 **SoundCloud** | track / playlist / likes       | nativo via `yt-dlp`                    |
+| 🍎 **Apple Music** | track / album / playlist     | scraping de meta tags + busca YT       |
+| 🌊 **Tidal**   | track / album / playlist          | scraping de meta tags + busca YT       |
+
+Use `horizon download <url>` ou cole no menu interativo, no bot ou no
+dashboard. Para o Spotify, **não precisa de API key**.
+
+---
+
+## ✨ Novidades da v2.5.1 ("Universal Fixed")
+
+Release de correções importantes em cima da v2.5.
+
+### 🐛 Bugfixes
+
+- **Bot voltou a baixar.** A v2.5 referenciava uma função removida
+  (`performSingleDownload`) e dava erro silencioso em qualquer link
+  do YouTube. Corrigido — agora todo download passa pelo resolver
+  universal.
+- **`/admin_reset` quebrava o bot** com `require is not defined` em ESM.
+  Trocado por import estático.
+- **Cache do bot lia pasta errada** em IDs negativos (canais).
+  Caminho agora é calculado com `sanitizeName` em ambos os lados.
+- **Player só respondia uma vez aos atalhos.** O listener de stdin
+  ficava órfão entre faixas. Reescrito com **raw mode** centralizado
+  no escopo do `play()`.
+
+### 🎵 Player com controles em raw mode
+
+Os atalhos respondem **instantaneamente**, sem precisar Enter:
+
+| Tecla              | Ação                  |
+| ------------------ | --------------------- |
+| `n` / Espaço / ⏎  | próxima faixa         |
+| `p`                | pausa/retoma          |
+| `s`                | re-shuffle            |
+| `q` / Esc / Ctrl+C | parar                 |
+
+### 🆕 CLI: download universal e favoritos
+
+```bash
+# baixa de qualquer plataforma — detecta sozinho
+horizon download "https://open.spotify.com/playlist/..."
+horizon dl       "https://soundcloud.com/.../sets/..."
+horizon dl       "https://music.apple.com/album/..." --preview
+
+# lista visual das plataformas suportadas
+horizon platforms
+
+# favoritos como comandos
+horizon fav list
+horizon fav add "Bohemian Rhapsody" -a "Queen"
+horizon fav download                    # baixa todos em lote
+horizon fav remove <id>
+horizon fav clear
+```
+
+### 🟢 Spotify no menu interativo
+
+A entrada **"🟢 Spotify / Deezer / Apple / Tidal / SoundCloud"** virou um
+submenu com 4 opções:
+
+- 🎵 Baixar uma faixa
+- 📦 **Baixar uma playlist / álbum** ← novo destaque
+- 👁️ Preview (sem baixar)
+- 🌐 Ver plataformas suportadas
+
+E há um item dedicado **"⭐ Favoritos"** com listar/adicionar/remover/baixar.
+
+---
+
+## ✨ Novidades da v2.5 ("Universal")
+
+### 🌐 Resolver universal
+
+Suporte nativo a **6 plataformas** num único módulo (`src/playlistResolver.js`).
+O bot do Telegram, o CLI e o dashboard usam o mesmo resolver.
+
+### ⭐ Sistema de favoritos
+
+Persistido em `~/.horizon/favorites.json`. Cada favorito tem id, título,
+artista (opcional), URL (opcional), tags e source. Pode ser exportado
+como lista de termos para download em lote.
+
+### 🤖 Bot do Telegram universal
+
+Cole link de qualquer plataforma → bot detecta e baixa. Novos comandos:
+
+- `/spotify <url>`, `/deezer <url>`, `/soundcloud <url>` — caminhos dedicados
+- `/playlist <url>` — confirma e baixa playlist inteira de qualquer fonte
+- `/fav` — gerenciamento de favoritos pelo chat
+- `/quality 320` — muda qualidade on-the-fly
+- `/platforms` — lista plataformas
+
+### 🌐 Web Dashboard 7 abas
+
+Reescrita do dashboard com abas: 📊 Visão Geral, 📥 Download, 📁 Playlists,
+⭐ Favoritos, 🔔 Inscrições, ⚙️ Config, 📝 Logs.
+**22 endpoints REST** e configurações editáveis pelo browser.
 
 ---
 
@@ -678,10 +796,20 @@ horizon completion fish > ~/.config/fish/completions/horizon.fish
 | Comando | O que faz |
 |---|---|
 | `horizon` | Menu interativo |
+| **`horizon download <url>`** ⭐ | **Baixa de qualquer plataforma (universal)** |
+| **`horizon dl <url>`** | Atalho para `download` |
+| **`horizon platforms`** | Lista plataformas suportadas |
 | `horizon search <termo>` | Busca + escolhe + baixa |
-| `horizon url <link>` | Baixa direto da URL |
+| `horizon url <link>` | Baixa direto da URL (YouTube) |
 | `horizon batch <lista>` | Baixa várias com concorrência |
 | `horizon playlist <url>` | Baixa playlist YT inteira |
+| `horizon spotify <url>` | Resolve e baixa do Spotify/Deezer/Apple |
+| `horizon spotify <url> --preview` | Mostra faixas sem baixar |
+| **`horizon fav list`** ⭐ | Lista favoritos |
+| **`horizon fav add "Title"`** | Adiciona aos favoritos |
+| **`horizon fav download`** | Baixa todos os favoritos em lote |
+| **`horizon fav remove <id>`** | Remove favorito |
+| **`horizon fav clear`** | Apaga todos os favoritos |
 | `horizon subs add <url>` | Cadastra inscrição |
 | `horizon subs list` | Lista inscrições |
 | `horizon subs remove <id>` | Remove inscrição |
@@ -709,8 +837,6 @@ horizon completion fish > ~/.config/fish/completions/horizon.fish
 | `horizon bot` | Inicia o bot do Telegram (modo servidor) |
 | `horizon schedule [-i 6]` | Sync automático em loop (foreground) |
 | `horizon cleanup` | Limpa cache efêmero do bot |
-| `horizon spotify <url>` | Resolve e baixa do Spotify/Deezer/Apple |
-| `horizon spotify <url> --preview` | Mostra faixas sem baixar |
 | `horizon play [pasta]` | Toca no terminal (mpv/ffplay) |
 | `horizon play --shuffle --loop` | Shuffle + repetir |
 | `horizon play --list` | Lista pastas tocáveis |
@@ -722,6 +848,41 @@ horizon completion fish > ~/.config/fish/completions/horizon.fish
 | `horizon profiles delete <nome>` | Deleta perfil |
 | `horizon web [--port 3777]` | Inicia o Web Dashboard |
 | `horizon notify <msg>` | Push notification pros admins |
+
+---
+
+## 🎵 Player de terminal
+
+Toca a sua biblioteca diretamente no terminal — útil em SSH, Termux ou
+quando você só quer ouvir sem abrir player gráfico.
+
+### Players suportados (detectados automaticamente, em ordem)
+
+1. **mpv** (recomendado) — `apt install mpv` / `brew install mpv` / `pkg install mpv`
+2. **ffplay** — já vem instalado se você tem ffmpeg
+3. **sox (`play`)** — fallback simples
+
+### Atalhos (raw mode — respondem instantaneamente)
+
+| Tecla              | Ação                              |
+| ------------------ | --------------------------------- |
+| `n` / Espaço / ⏎  | próxima faixa                     |
+| `p`                | pausa / retoma                    |
+| `s`                | re-shuffle (re-embaralha a fila) |
+| `q` / Esc / Ctrl+C | parar e voltar ao terminal        |
+
+### Exemplos
+
+```bash
+horizon play                        # menu pra escolher pasta
+horizon play Favs                   # toca a pasta "Favs"
+horizon play Favs --shuffle         # ordem aleatória
+horizon play Rock --shuffle --loop  # shuffle + repete ao chegar no fim
+horizon play --list                 # lista pastas com áudio + contagem
+```
+
+> Em SSH, certifique-se de que o servidor tem saída de áudio (ALSA/Pulse).
+> No Termux, peça `pkg install pulseaudio` antes de `pkg install mpv`.
 
 ---
 
@@ -886,27 +1047,49 @@ horizon schedule -i 6   # roda sync a cada 6 horas
 
 ---
 
-## 💡 Spotify / Deezer / Apple Music
+## 💡 Spotify / Deezer / Apple Music / Tidal / SoundCloud
 
-A partir da v2.4, o Horizon resolve links **nativamente** — sem precisar
-de sites externos!
+A partir da v2.5, o Horizon tem um **resolver universal** que aceita
+links das 6 plataformas — sem site externo, sem API key.
+
+### 🚀 Comando universal (recomendado)
 
 ```bash
-# Cola o link direto:
-horizon spotify "https://open.spotify.com/track/..."
-horizon spotify "https://open.spotify.com/playlist/..."
-horizon spotify "https://deezer.com/track/..."
+# Detecta automaticamente a plataforma e baixa
+horizon download "https://open.spotify.com/playlist/..."
+horizon dl       "https://soundcloud.com/.../sets/..."
+horizon dl       "https://music.apple.com/album/..." --preview
+horizon dl       "https://tidal.com/browse/album/..." -p MeuAlbum
 
-# Preview (só ver faixas sem baixar):
+# Lista plataformas suportadas
+horizon platforms
+```
+
+### 🟢 Comando legado (Spotify/Deezer/Apple — ainda funciona)
+
+```bash
+horizon spotify "https://open.spotify.com/track/..."
+horizon spotify "https://open.spotify.com/playlist/..." --playlist MinhaLista
 horizon spotify "https://open.spotify.com/album/..." --preview
 ```
 
-O resolver usa oEmbed público do Spotify (sem API key), extrai os nomes
-das faixas e busca cada uma no YouTube automaticamente.
+### Como funciona
 
-> **Fallback manual:** se o resolver não funcionar pra alguma playlist muito
-> grande, você pode converter em [TuneMyMusic.com](https://www.tunemymusic.com)
-> e colar o link do YouTube no Horizon.
+| Plataforma | Estratégia |
+|---|---|
+| YouTube / SoundCloud | Download nativo via `yt-dlp` (alta qualidade) |
+| Spotify | oEmbed público + scraping do embed → busca no YouTube |
+| Deezer | oEmbed + scraping → busca no YouTube |
+| Apple Music | Scraping de meta tags → busca no YouTube |
+| Tidal | Scraping de meta tags → busca no YouTube |
+
+> **No menu interativo** (`horizon`), entre em **"🟢 Spotify / Deezer /
+> Apple / Tidal / SoundCloud"** e escolha entre faixa, **playlist/álbum**,
+> preview, ou ver plataformas suportadas.
+
+> **Bot do Telegram:** cole qualquer link das plataformas acima e o bot
+> resolve automaticamente. Comandos dedicados: `/spotify`, `/deezer`,
+> `/soundcloud`, `/playlist`.
 
 ---
 
@@ -943,12 +1126,14 @@ horizon_cli/
     ├── updater.js         # self-update
     ├── completions.js     # bash/zsh/fish
     ├── ui.js              # splash + settingsMenu (PT, seções)
-    ├── spotify.js         # ✨ resolver Spotify/Deezer/Apple (v2.4)
-    ├── player.js          # ✨ terminal music player (v2.4)
-    ├── organizer.js       # ✨ smart library organizer (v2.4)
-    ├── profiles.js        # ✨ config profiles (v2.4)
-    ├── pushNotify.js      # ✨ push notifications Telegram (v2.4)
-    └── webServer.js       # ✨ web dashboard + REST API (v2.4)
+    ├── spotify.js         # resolver Spotify/Deezer/Apple (v2.4)
+    ├── playlistResolver.js # ⭐ resolver universal multi-plataforma (v2.5)
+    ├── favorites.js       # ⭐ sistema de favoritos com tags (v2.5)
+    ├── player.js          # terminal music player com raw mode (v2.4 / fixed v2.5.1)
+    ├── organizer.js       # smart library organizer (v2.4)
+    ├── profiles.js        # config profiles (v2.4)
+    ├── pushNotify.js      # push notifications Telegram (v2.4)
+    └── webServer.js       # web dashboard + REST API (v2.4 / 22 endpoints v2.5)
 ```
 
 ---
@@ -964,6 +1149,10 @@ horizon_cli/
 | **Migrei de máquina e quero recuperar o dedup** | `horizon scan --rebuild` |
 | **Quero levar minhas configs pra outro PC** | `horizon backup` → copia o JSON → `horizon restore` no novo |
 | **Bot não recebe arquivos** | Cheque `ALLOWED_USER_IDS` no `.env` |
+| **Bot dá erro em qualquer link do YouTube** | Atualize para v2.5.1+ (`horizon update --self`) — bug conhecido da v2.5.0 |
+| **Player só funciona uma vez (atalhos morrem)** | Atualize para v2.5.1+ — listener de stdin foi reescrito |
+| **Player: "Nenhum player encontrado"** | Instale `mpv` (recomendado): `apt install mpv` / `pkg install mpv` / `brew install mpv` |
+| **Spotify playlist não carrega faixas** | Algumas playlists privadas/restritas não expõem oEmbed; use `horizon dl --preview` pra confirmar antes |
 | **Quero limpar tudo e começar do zero** | `horizon config` → "Restaurar padrões de fábrica" |
 
 ---
