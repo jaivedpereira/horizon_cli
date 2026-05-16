@@ -1,5 +1,146 @@
 # Changelog
 
+## [2.5.0] — 2026-05-16 — "Universal"
+
+### 🌐 Resolver Universal de Plataformas
+
+O Horizon agora baixa de **6 plataformas** com um unico comando. Cole o link
+e ele resolve sozinho — sem converter, sem site externo, sem complicacao.
+
+| Plataforma | Tipos suportados |
+|---|---|
+| ▶️ **YouTube** | Track, Playlist, Mix |
+| 🟢 **Spotify** | Track, Album, Playlist |
+| 🎵 **Deezer** | Track, Album, Playlist |
+| 🟠 **SoundCloud** | Track, Playlist, Likes |
+| 🍎 **Apple Music** | Track, Album, Playlist |
+| 🌊 **Tidal** | Track, Album, Playlist |
+
+- **Deteccao automatica**: cola o link em qualquer lugar (CLI, bot, dashboard)
+  e o Horizon identifica a plataforma e resolve.
+- **`horizon download <url>`** — funciona com qualquer plataforma acima.
+- **Preview**: `horizon download <url> --preview` mostra faixas sem baixar.
+- **SoundCloud nativo**: usa yt-dlp diretamente (melhor qualidade).
+- **Tidal/Apple**: extrai metadados via scraping e busca no YouTube.
+- Novo modulo: `src/playlistResolver.js` — resolver universal unificado.
+
+---
+
+### ⭐ Sistema de Favoritos
+
+Salve suas musicas preferidas e baixe tudo de uma vez.
+
+- **`horizon fav add "Nome da Musica"`** — adiciona aos favoritos.
+- **`horizon fav list`** — lista todos os favoritos.
+- **`horizon fav remove <id>`** — remove um favorito.
+- **`horizon fav download`** — baixa TODOS os favoritos de uma vez.
+- **`horizon fav search <termo>`** — busca nos favoritos.
+- **Tags**: organize com tags (`horizon fav tag <id> <tag>`).
+- Funciona no bot Telegram (`/fav`) e no Web Dashboard.
+- Persistido em `~/.horizon/favorites.json`.
+
+---
+
+### 🤖 Bot Telegram v2.5 — Universal
+
+O bot agora aceita links de QUALQUER plataforma suportada. Cole e baixa.
+
+#### Novos comandos do bot
+
+| Comando | O que faz |
+|---|---|
+| `/spotify <url>` | Baixa do Spotify (track/album/playlist) |
+| `/deezer <url>` | Baixa do Deezer |
+| `/soundcloud <url>` | Baixa do SoundCloud |
+| `/playlist <url>` | Baixa playlist de qualquer plataforma |
+| `/fav` | Gerenciar favoritos (list/add/remove/download) |
+| `/quality <128\|192\|256\|320>` | Mudar qualidade on-the-fly |
+| `/platforms` | Mostra plataformas suportadas |
+
+#### Melhorias no bot
+
+- **Deteccao automatica**: manda um link do Spotify/Deezer/SoundCloud e
+  o bot reconhece e baixa sem precisar de comando especifico.
+- **Quota aumentada**: padrao agora e 50/dia (era 30).
+- **Concorrencia**: padrao 3 simultaneos (era 2).
+- **Playlist max**: 150 faixas por playlist (era 100).
+- **Favoritos integrados**: salve e baixe direto do chat.
+- **Mensagem de boas-vindas** atualizada com todas as plataformas.
+- **Admin /admin_reset**: reseta circuit breaker pelo chat.
+
+---
+
+### 🌐 Web Dashboard v2.5 — Turbinado
+
+Dashboard totalmente reescrito com interface por abas e muito mais funcoes.
+
+#### Novas abas
+
+| Aba | Funcao |
+|---|---|
+| 📊 Visao Geral | Cards, historico, acoes rapidas |
+| 📥 Download | Download universal com cards de plataforma |
+| 📁 Playlists | Navegar pastas e ver contagem de arquivos |
+| ⭐ Favoritos | Adicionar, listar e remover favoritos |
+| 🔔 Inscricoes | Gerenciar inscricoes (add/remove) |
+| ⚙️ Config | Editar TODAS as configuracoes pelo browser |
+| 📝 Logs | Ver logs em tempo real |
+
+#### Novos endpoints da API (22 total)
+
+| Endpoint | Funcao |
+|---|---|
+| `GET /api/favorites` | Listar favoritos |
+| `GET /api/settings` | Ver configuracoes atuais |
+| `GET /api/logs` | Ultimas 50 linhas de log |
+| `GET /api/platforms` | Plataformas suportadas |
+| `POST /api/universal` | Download de qualquer plataforma |
+| `POST /api/favorites/add` | Adicionar favorito |
+| `POST /api/favorites/remove` | Remover favorito |
+| `POST /api/settings` | Salvar configuracoes |
+| `POST /api/subs/add` | Adicionar inscricao |
+| `DELETE /api/subs` | Remover inscricao |
+
+#### Melhorias visuais
+
+- **Cards de plataforma** mostrando todas as fontes suportadas.
+- **Editor de configuracoes** completo (formato, qualidade, anti-ban, etc).
+- **Gerenciador de favoritos** com adicionar/remover inline.
+- **Viewer de logs** com coloracao por nivel (info/warn/error).
+- **Navegador de playlists** com contagem de arquivos.
+
+---
+
+### 🆕 Novos comandos CLI
+
+| Comando | O que faz |
+|---|---|
+| `horizon download <url>` | Download universal (qualquer plataforma) |
+| `horizon download <url> --preview` | Preview sem baixar |
+| `horizon fav add <titulo>` | Adicionar favorito |
+| `horizon fav list` | Listar favoritos |
+| `horizon fav remove <id>` | Remover favorito |
+| `horizon fav download` | Baixar todos os favoritos |
+| `horizon fav search <termo>` | Buscar nos favoritos |
+| `horizon platforms` | Listar plataformas suportadas |
+
+---
+
+### 🔧 Internals
+
+- `src/playlistResolver.js` (novo) — resolver universal para 6 plataformas.
+- `src/favorites.js` (novo) — sistema de favoritos com tags e export.
+- `bot.js` — reescrito v2.5 com suporte universal + 7 novos comandos.
+- `src/webServer.js` — reescrito com 22 endpoints + dashboard por abas.
+- `package.json` v2.5.0 + keywords expandidas.
+- Bot agora importa `playlistResolver` e `favorites`.
+- Dashboard com 7 abas navegaveis (single-page, zero deps).
+- API suporta `POST /api/universal` para download de qualquer fonte.
+- Configuracoes editaveis remotamente via `POST /api/settings`.
+- Zero dependencias novas (continua usando apenas `http` nativo!).
+
+---
+
 ## [2.4.0] — 2026-05-15 — "Comando Central"
 
 ### 🌐 Web Dashboard
