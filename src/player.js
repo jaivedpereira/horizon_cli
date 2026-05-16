@@ -95,55 +95,38 @@ function printNowPlaying(info, index, total) {
     );
     console.log(chalk.gray(`     ${num}`));
     console.log(chalk.blueBright('━'.repeat(60)));
-    console.log(chalk.gray('  Enter=próxima  q=parar  s=shuffle'));
+    console.log(chalk.gray('  n/Espaço=próxima · p=pausa · s=shuffle · q/Esc=parar'));
     console.log('');
 }
 
 /**
  * Toca um único arquivo usando o player detectado.
- * Retorna uma Promise que resolve quando o arquivo termina ou é pulado.
- * @returns {'ended'|'skipped'|'stopped'}
+ * Retorna uma Promise que resolve quando o arquivo termina ou o caller pede skip/stop.
+ *
+ * Diferente da v2.5: agora NAO escuta stdin diretamente. O controle de teclado
+ * fica centralizado no `play()` e usa `child.kill()` para interromper.
+ *
+ * @returns Promise<{ ended: boolean, child: ChildProcess }>
  */
 function playFile(filePath, playerBin) {
-    return new Promise((resolve) => {
-        const args = buildPlayerArgs(playerBin, filePath);
-        const child = spawn(playerBin, args, {
-            stdio: ['ignore', 'ignore', 'ignore'],
-        });
+    const args = buildPlayerArgs(playerBin, filePath);
+    const child = spawn(playerBin, args, {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        detached: false,
+    });
 
+    const promise = new Promise((resolve) => {
         let resolved = false;
-        const done = (reason) => {
+        const finish = (reason) => {
             if (resolved) return;
             resolved = true;
-            try { child.kill(); } catch { /* ignore */ }
             resolve(reason);
         };
-
-        child.on('exit', () => done('ended'));
-        child.on('error', () => done('ended'));
-
-        // Escuta stdin pra controles.
-        const onData = (data) => {
-            const key = data.toString().trim().toLowerCase();
-            if (key === 'q') done('stopped');
-            else if (key === '' || key === 'n') done('skipped'); // Enter ou 'n'
-            else if (key === 's') done('shuffle');
-        };
-
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(false);
-            process.stdin.resume();
-            process.stdin.on('data', onData);
-
-            // Cleanup listener quando terminar.
-            const cleanup = () => {
-                process.stdin.removeListener('data', onData);
-                process.stdin.pause();
-            };
-            child.on('exit', cleanup);
-            child.on('error', cleanup);
-        }
+        child.on('exit', () => finish('ended'));
+        child.on('error', () => finish('error'));
     });
+
+    return { promise, child };
 }
 
 function buildPlayerArgs(bin, file) {
@@ -171,6 +154,13 @@ function buildPlayerArgs(bin, file) {
 
 /**
  * Player principal — toca uma lista de arquivos em sequência.
+ *
+ * Controles (capturados em raw mode, sem precisar Enter):
+ *   n / espaço / →  → próxima
+ *   q / Esc / Ctrl+C → parar
+ *   s              → re-shuffle
+ *   p / pause      → pausa/retoma (mpv only via SIGSTOP/SIGCONT)
+ *
  * @param {string} target       Pasta, nome de playlist ou arquivo.
  * @param {object} options      { shuffle, loop }
  */
@@ -197,49 +187,122 @@ export async function play(target, { shuffle = false, loop = false } = {}) {
     console.log(chalk.gray(`   Player: ${playerBin} | Shuffle: ${shuffle ? 'on' : 'off'} | Loop: ${loop ? 'on' : 'off'}\n`));
     log.info(`player: start ${target} (${total} files, player=${playerBin})`);
 
+    // Setup teclado UMA VEZ — sobrevive entre faixas.
+    const tty = process.stdin.isTTY;
+    let currentChild = null;
+    let action = null; // 'skip' | 'stop' | 'shuffle' | 'pause' | 'resume'
+    let paused = false;
+
+    const onKey = (data) => {
+        const buf = Buffer.from(data);
+        // Ctrl+C (0x03) ou Esc (0x1b) ou 'q'
+        if (buf[0] === 0x03 || buf[0] === 0x1b || buf.toString().toLowerCase() === 'q') {
+            action = 'stop';
+            killCurrent();
+            return;
+        }
+        const key = buf.toString().toLowerCase();
+        if (key === 'n' || key === ' ' || key === '\r' || key === '\n') {
+            action = 'skip';
+            killCurrent();
+        } else if (key === 's') {
+            action = 'shuffle';
+            killCurrent();
+        } else if (key === 'p') {
+            // Toggle pause via signals (funciona em mpv/ffplay no Linux/macOS).
+            if (!currentChild) return;
+            try {
+                if (paused) {
+                    currentChild.kill('SIGCONT');
+                    paused = false;
+                    process.stdout.write(chalk.green('\r  ▶ retomado          \n'));
+                } else {
+                    currentChild.kill('SIGSTOP');
+                    paused = true;
+                    process.stdout.write(chalk.yellow('\r  ⏸ pausado (p para retomar)\n'));
+                }
+            } catch (err) {
+                log.warn(`player: pause toggle falhou: ${err.message}`);
+            }
+        }
+    };
+
+    const killCurrent = () => {
+        if (!currentChild) return;
+        try {
+            // Se estava pausado, retoma antes de matar pra evitar zumbi.
+            if (paused) { try { currentChild.kill('SIGCONT'); } catch {} paused = false; }
+            currentChild.kill();
+        } catch { /* ignore */ }
+    };
+
+    if (tty) {
+        try { process.stdin.setRawMode(true); } catch { /* nao-tty */ }
+        process.stdin.resume();
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('data', onKey);
+    }
+
+    const cleanupStdin = () => {
+        if (!tty) return;
+        try {
+            process.stdin.removeListener('data', onKey);
+            process.stdin.setRawMode(false);
+            process.stdin.pause();
+        } catch { /* ignore */ }
+    };
+
     let index = 0;
     let playing = true;
 
-    while (playing) {
-        if (index >= files.length) {
-            if (loop) {
-                index = 0;
-                if (shuffle) {
-                    // Re-shuffle a cada loop.
+    try {
+        while (playing) {
+            if (index >= files.length) {
+                if (loop) {
+                    index = 0;
+                    if (shuffle) {
+                        for (let i = files.length - 1; i > 0; i--) {
+                            const j = Math.floor(Math.random() * (i + 1));
+                            [files[i], files[j]] = [files[j], files[i]];
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            const file = files[index];
+            const info = parseNowPlaying(file);
+            printNowPlaying(info, index, total);
+
+            action = null;
+            paused = false;
+            const { promise, child } = playFile(file, playerBin);
+            currentChild = child;
+            await promise;
+            currentChild = null;
+
+            // Decide proximo passo baseado na acao do usuario (ou final natural).
+            switch (action) {
+                case 'stop':
+                    playing = false;
+                    break;
+                case 'shuffle':
                     for (let i = files.length - 1; i > 0; i--) {
                         const j = Math.floor(Math.random() * (i + 1));
                         [files[i], files[j]] = [files[j], files[i]];
                     }
-                }
-            } else {
-                break;
+                    index = 0;
+                    console.log(chalk.yellow('🔀 Re-shuffled!'));
+                    break;
+                case 'skip':
+                default:
+                    index += 1;
+                    break;
             }
         }
-
-        const file = files[index];
-        const info = parseNowPlaying(file);
-        printNowPlaying(info, index, total);
-
-        const action = await playFile(file, playerBin);
-
-        switch (action) {
-            case 'ended':
-            case 'skipped':
-                index += 1;
-                break;
-            case 'stopped':
-                playing = false;
-                break;
-            case 'shuffle':
-                // Re-shuffle e reinicia do começo.
-                for (let i = files.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [files[i], files[j]] = [files[j], files[i]];
-                }
-                index = 0;
-                console.log(chalk.yellow('🔀 Shuffled!'));
-                break;
-        }
+    } finally {
+        cleanupStdin();
     }
 
     console.log(chalk.green('\n✅ Player encerrado.\n'));

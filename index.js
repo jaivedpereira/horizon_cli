@@ -75,6 +75,8 @@ import { rebuildArchive, scanLibrary } from './src/scanner.js';
 import { createBackup, restoreBackup } from './src/backup.js';
 import { runHealthCheck, prettyPrintHealth } from './src/health.js';
 import { resolveAndDownload, previewSpotifyLink, detectPlatform } from './src/spotify.js';
+import { universalResolve, universalPreview, detectSource, supportedPlatforms } from './src/playlistResolver.js';
+import { listFavorites, addFavorite, removeFavorite, favoritesCount, exportFavoritesAsTerms, clearFavorites } from './src/favorites.js';
 import { play, listPlayable, detectPlayer } from './src/player.js';
 import { planOrganize, executeOrganize, printPlan } from './src/organizer.js';
 import { listProfiles, saveProfile, loadProfile, deleteProfile, printProfiles } from './src/profiles.js';
@@ -625,7 +627,8 @@ async function mainMenu() {
                 { name: '💾  Backup / Restaurar', value: 'backup' },
                 { name: '🎤  Baixar letras (.lrc) de uma pasta', value: 'lyrics' },
                 { name: '📤  Exportar .m3u + README de uma pasta', value: 'export' },
-                { name: '🟢  Spotify / Deezer (colar link)', value: 'spotify' },
+                { name: '🟢  Spotify / Deezer / Apple / Tidal / SoundCloud', value: 'spotify' },
+                { name: '⭐  Favoritos', value: 'favorites' },
                 { name: '🎵  Player (tocar no terminal)', value: 'player' },
                 { name: '🗂️   Organizar biblioteca por artista', value: 'organize' },
                 { name: '🎚️   Perfis de configuração', value: 'profiles' },
@@ -829,22 +832,132 @@ async function mainMenu() {
             break;
         }
         case 'spotify': {
-            const { url } = await inquirer.prompt([
-                { type: 'input', name: 'url', message: 'Cole o link do Spotify / Deezer / Apple Music:' },
+            const { sub } = await inquirer.prompt([
+                {
+                    type: 'rawlist',
+                    name: 'sub',
+                    message: '🟢 Spotify / Deezer / Apple Music / Tidal / SoundCloud:',
+                    choices: [
+                        { name: '🎵 Baixar uma faixa (link)', value: 'track' },
+                        { name: '📦 Baixar uma playlist / álbum (link)', value: 'playlist' },
+                        { name: '👁️  Preview (mostrar faixas sem baixar)', value: 'preview' },
+                        { name: '🌐 Ver plataformas suportadas', value: 'platforms' },
+                        { name: '⬅️  Voltar', value: 'back' },
+                    ],
+                },
             ]);
-            if (!url) break;
-            const info = detectPlatform(url);
-            if (!info) {
-                console.log(chalk.red('❌ Link não reconhecido.'));
+            if (sub === 'back') break;
+            if (sub === 'platforms') {
+                const plats = supportedPlatforms();
+                console.log(chalk.blueBright('\n🌐 Plataformas suportadas:\n'));
+                for (const p of plats) {
+                    console.log(`  ${p.emoji}  ${chalk.white(p.name.padEnd(14))} ${chalk.gray(p.patterns.join(', '))}`);
+                }
+                console.log('');
                 break;
             }
-            const spinner = createSpinner(`Resolvendo ${info.platform}...`).start();
-            const res = await resolveAndDownload(url);
+
+            const { url } = await inquirer.prompt([
+                { type: 'input', name: 'url', message: 'Cole o link (Spotify / Deezer / Apple / Tidal / SoundCloud):' },
+            ]);
+            if (!url) break;
+
+            const info = detectSource(url);
+            if (!info) {
+                console.log(chalk.red('❌ Link não reconhecido. Suportados: YouTube, Spotify, Deezer, SoundCloud, Apple Music, Tidal.'));
+                break;
+            }
+
+            if (sub === 'preview') {
+                const spinner = createSpinner('Extraindo faixas...').start();
+                const res = await universalPreview(url);
+                spinner.stop();
+                if (!res.ok) { console.log(chalk.red(`❌ ${res.error}`)); break; }
+                console.log(chalk.blueBright(`\n🎶 ${res.platform} (${res.type}):`));
+                if (res.tracks?.length) {
+                    res.tracks.slice(0, 50).forEach((t, i) => console.log(chalk.white(`  ${i + 1}. ${t}`)));
+                    if (res.tracks.length > 50) console.log(chalk.gray(`  ... e mais ${res.tracks.length - 50}`));
+                } else {
+                    console.log(chalk.gray(`  ${res.note || 'sem detalhes adicionais'}`));
+                }
+                console.log('');
+                break;
+            }
+
+            // sub === 'track' ou 'playlist'
+            const folder = await askPlaylist(sub === 'playlist' ? 'MinhaPlaylist' : undefined);
+            const spinner = createSpinner(
+                `Resolvendo ${info.platform} (${info.type})...`,
+            ).start();
+            const res = await universalResolve(url, { playlist: folder });
             spinner.stop();
             if (res.ok) {
-                console.log(chalk.green(`✅ ${res.downloaded || 1} de ${res.tracks || 1} faixas baixadas!`));
+                const txt = res.downloaded != null
+                    ? `${res.downloaded}/${res.tracks || 1} faixas`
+                    : `${res.tracks || 1} faixa(s)`;
+                console.log(chalk.green(`✅ ${info.platform} pronto: ${txt} → ${folder}`));
+                notify('Horizon CLI', `✅ ${info.platform}: ${txt}`, 'sucesso');
             } else {
-                console.log(chalk.red(`❌ ${res.error}`));
+                console.log(chalk.red(`❌ ${res.error || 'falha no download'}`));
+            }
+            break;
+        }
+        case 'favorites': {
+            const { fAction } = await inquirer.prompt([
+                {
+                    type: 'rawlist',
+                    name: 'fAction',
+                    message: '⭐ Favoritos:',
+                    choices: [
+                        { name: 'Listar favoritos', value: 'list' },
+                        { name: 'Adicionar favorito', value: 'add' },
+                        { name: 'Remover favorito', value: 'remove' },
+                        { name: 'Baixar TODOS os favoritos', value: 'download' },
+                        { name: 'Limpar favoritos', value: 'clear' },
+                        { name: '⬅️  Voltar', value: 'back' },
+                    ],
+                },
+            ]);
+            if (fAction === 'list') {
+                const favs = listFavorites({});
+                if (!favs.length) { console.log(chalk.yellow('⭐ Sem favoritos.')); break; }
+                console.log(chalk.blueBright(`\n⭐ Favoritos (${favs.length}):\n`));
+                favs.forEach((f, i) => {
+                    const tags = f.tags?.length ? chalk.gray(` [${f.tags.join(', ')}]`) : '';
+                    console.log(`  ${i + 1}. ${chalk.white(f.title)}${f.artist ? chalk.gray(' — ' + f.artist) : ''}${tags}`);
+                });
+                console.log('');
+            } else if (fAction === 'add') {
+                const ans = await inquirer.prompt([
+                    { type: 'input', name: 'title', message: 'Título / nome da música:' },
+                    { type: 'input', name: 'artist', message: 'Artista (opcional):' },
+                    { type: 'input', name: 'url', message: 'URL (opcional):' },
+                ]);
+                if (ans.title) {
+                    const r = addFavorite({ title: ans.title, artist: ans.artist, url: ans.url, source: 'cli' });
+                    if (r.duplicate) console.log(chalk.yellow('⚠️  Já está nos favoritos.'));
+                    else console.log(chalk.green(`✅ Adicionado: ${r.favorite.title}`));
+                }
+            } else if (fAction === 'remove') {
+                const favs = listFavorites({});
+                if (!favs.length) { console.log(chalk.yellow('⭐ Sem favoritos.')); break; }
+                const { id } = await inquirer.prompt([
+                    {
+                        type: 'rawlist', name: 'id', message: 'Qual remover?',
+                        choices: favs.map((f) => ({ name: `${f.title}${f.artist ? ' — ' + f.artist : ''}`, value: f.id })),
+                    },
+                ]);
+                if (removeFavorite(id)) console.log(chalk.green('✅ Removido.'));
+            } else if (fAction === 'download') {
+                const terms = exportFavoritesAsTerms();
+                if (!terms.length) { console.log(chalk.yellow('⭐ Sem favoritos.')); break; }
+                const folder = await askPlaylist('Favoritos');
+                await doBatch(terms, { playlist: folder });
+            } else if (fAction === 'clear') {
+                const { yes } = await inquirer.prompt([
+                    { type: 'confirm', name: 'yes', message: 'Apagar TODOS os favoritos?', default: false },
+                ]);
+                if (yes) { clearFavorites(); console.log(chalk.green('✅ Favoritos limpos.')); }
             }
             break;
         }
@@ -947,7 +1060,7 @@ const program = new Command();
 program
     .name('horizon')
     .description('Horizon CLI — ecossistema musical no terminal')
-    .version('2.4.0');
+    .version('2.5.1');
 
 program
     .command('search <termo...>')
@@ -1181,6 +1294,107 @@ program
         console.log(chalk.green(`✅ Cache do bot limpo: ${removed} arquivos removidos.`));
         process.exit(0);
     });
+
+// Novos v2.5:
+program
+    .command('download <url>')
+    .alias('dl')
+    .description('Baixa de QUALQUER plataforma suportada (YouTube, Spotify, Deezer, SoundCloud, Apple, Tidal)')
+    .option('-p, --playlist <nome>', 'pasta de destino')
+    .option('--preview', 'mostra o que seria baixado sem baixar')
+    .action(async (url, opts) => {
+        requireDependencies();
+        const info = detectSource(url);
+        if (!info) {
+            console.log(chalk.red('❌ Plataforma não reconhecida. Suportados: YouTube, Spotify, Deezer, SoundCloud, Apple Music, Tidal.'));
+            process.exit(1);
+        }
+        if (opts.preview) {
+            const spinner = createSpinner(`Resolvendo ${info.platform}...`).start();
+            const res = await universalPreview(url);
+            spinner.stop();
+            if (!res.ok) { console.log(chalk.red(`❌ ${res.error}`)); process.exit(1); }
+            console.log(chalk.blueBright(`\n🎶 ${res.platform} (${res.type}):\n`));
+            if (res.tracks?.length) {
+                res.tracks.forEach((t, i) => console.log(chalk.white(`  ${i + 1}. ${t}`)));
+            } else {
+                console.log(chalk.gray(`  ${res.note || ''}`));
+            }
+            console.log('');
+            process.exit(0);
+        }
+        const spinner = createSpinner(`Baixando de ${info.platform} (${info.type})...`).start();
+        const res = await universalResolve(url, { playlist: opts.playlist });
+        spinner.stop();
+        if (res.ok) {
+            const txt = res.downloaded != null
+                ? `${res.downloaded}/${res.tracks || 1} faixas`
+                : 'concluído';
+            console.log(chalk.green(`\n✅ ${info.platform}: ${txt}`));
+        } else {
+            console.log(chalk.red(`❌ ${res.error || 'falha no download'}`));
+        }
+        process.exit(res.ok ? 0 : 1);
+    });
+
+program
+    .command('platforms')
+    .description('Listar plataformas suportadas pelo resolver universal')
+    .action(() => {
+        const plats = supportedPlatforms();
+        console.log(chalk.blueBright('\n🌐 Plataformas suportadas:\n'));
+        for (const p of plats) {
+            console.log(`  ${p.emoji}  ${chalk.white(p.name.padEnd(14))} ${chalk.gray(p.patterns.join(', '))}`);
+        }
+        console.log('');
+        process.exit(0);
+    });
+
+const favCmd = program.command('fav').alias('favorites').description('Gerenciar favoritos');
+favCmd.command('list').description('Listar favoritos')
+    .option('-q, --query <texto>', 'busca por título/artista')
+    .option('-t, --tag <tag>', 'filtra por tag')
+    .action((opts) => {
+        const favs = listFavorites({ search: opts.query, tag: opts.tag });
+        if (!favs.length) { console.log(chalk.yellow('⭐ Nenhum favorito.')); process.exit(0); }
+        console.log(chalk.blueBright(`\n⭐ Favoritos (${favs.length}):\n`));
+        favs.forEach((f, i) => {
+            const tags = f.tags?.length ? chalk.gray(` [${f.tags.join(', ')}]`) : '';
+            console.log(`  ${i + 1}. ${chalk.white(f.title)}${f.artist ? chalk.gray(' — ' + f.artist) : ''}${tags}`);
+            console.log(`     ${chalk.gray('id=' + f.id)}`);
+        });
+        console.log('');
+        process.exit(0);
+    });
+favCmd.command('add <title...>').description('Adicionar favorito')
+    .option('-a, --artist <nome>', 'artista')
+    .option('-u, --url <url>', 'URL')
+    .action((titleParts, opts) => {
+        const r = addFavorite({ title: titleParts.join(' '), artist: opts.artist, url: opts.url, source: 'cli' });
+        if (r.duplicate) { console.log(chalk.yellow('⚠️  Já está nos favoritos.')); process.exit(0); }
+        console.log(chalk.green(`✅ Adicionado: ${r.favorite.title} (id=${r.favorite.id})`));
+        process.exit(0);
+    });
+favCmd.command('remove <id>').description('Remover favorito por ID')
+    .action((id) => {
+        if (removeFavorite(id)) console.log(chalk.green('✅ Removido.'));
+        else console.log(chalk.red('❌ Não encontrado.'));
+        process.exit(0);
+    });
+favCmd.command('download').description('Baixar TODOS os favoritos como lote')
+    .option('-p, --playlist <nome>', 'pasta de destino', 'Favoritos')
+    .action(async (opts) => {
+        requireDependencies();
+        const terms = exportFavoritesAsTerms();
+        if (!terms.length) { console.log(chalk.yellow('⭐ Sem favoritos pra baixar.')); process.exit(0); }
+        await doBatch(terms, { playlist: opts.playlist });
+        process.exit(0);
+    });
+favCmd.command('clear').description('Apagar todos os favoritos').action(() => {
+    clearFavorites();
+    console.log(chalk.green('✅ Favoritos limpos.'));
+    process.exit(0);
+});
 
 // Novos v2.4:
 program
